@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Build output
+build/
+DerivedData/
+
+# XcodeGen output (generated from project.yml — run `xcodegen generate`)
+*.xcodeproj
+
+# Xcode user state
+xcuserdata/
+*.xcuserstate
+
+# Claude Code local settings
+.claude/settings.local.json
