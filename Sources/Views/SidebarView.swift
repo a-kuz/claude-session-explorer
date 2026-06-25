@@ -6,11 +6,11 @@ struct SidebarView: View {
     var body: some View {
         List {
             Section {
-                quickRow(.all, icon: "tray.full", title: "Все сессии",
+                quickRow(.all, icon: "tray.full", title: "All Sessions",
                          count: model.allSessions.count)
                 attentionRow
                 quickRow(.favorites, icon: "star.fill", iconColor: Color(hex: 0xFEBC2E),
-                         title: "Избранное", count: model.favorites.count)
+                         title: "Favorites", count: model.favorites.count)
             }
 
             Section {
@@ -19,26 +19,26 @@ struct SidebarView: View {
                 }
             } header: {
                 HStack(spacing: 4) {
-                    Text("ПРОЕКТЫ")
+                    Text("PROJECTS")
                     Spacer()
                     Button { model.selectAllProjects() } label: {
                         Image(systemName: "checklist.checked")
                     }
-                    .buttonStyle(.borderless).help("Выбрать все")
+                    .buttonStyle(.borderless).help("Select all")
                     Button { model.clearProjects() } label: {
                         Image(systemName: "checklist.unchecked")
                     }
-                    .buttonStyle(.borderless).help("Снять все")
+                    .buttonStyle(.borderless).help("Clear all")
                 }
             }
 
-            Section("ПЕРИОД") {
-                quickRow(.today, icon: "clock", title: "Сегодня", count: countToday())
-                quickRow(.last24h, icon: "clock.arrow.circlepath", title: "За 24 часа",
+            Section("PERIOD") {
+                quickRow(.today, icon: "clock", title: "Today", count: countToday())
+                quickRow(.last24h, icon: "clock.arrow.circlepath", title: "Last 24 Hours",
                          count: countWithin(.hour, -24))
-                quickRow(.last2d, icon: "calendar.day.timeline.left", title: "За 2 дня",
+                quickRow(.last2d, icon: "calendar.day.timeline.left", title: "Last 2 Days",
                          count: countWithin(.day, -2))
-                quickRow(.week, icon: "calendar", title: "За 7 дней", count: countWithin(.day, -7))
+                quickRow(.week, icon: "calendar", title: "Last 7 Days", count: countWithin(.day, -7))
             }
         }
         .listStyle(.sidebar)
@@ -56,14 +56,14 @@ struct SidebarView: View {
         return model.allSessions.filter { $0.mtime > t }.count
     }
 
-    // "Требует ответа" — not a filter but the entry point into the triage screen.
+    // "Needs Reply" — not a filter but the entry point into the triage screen.
     // The accent pill shows how many sessions are waiting on a reply.
     @ViewBuilder
     private var attentionRow: some View {
         let n = model.attentionCount
         Label {
             HStack {
-                Text("Требует ответа").fontWeight(n > 0 ? .medium : .regular)
+                Text("Needs Reply").fontWeight(n > 0 ? .medium : .regular)
                 Spacer()
                 if n > 0 {
                     Text("\(n)")
@@ -82,7 +82,7 @@ struct SidebarView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { if n > 0 { model.enterTriage() } }
-        .help(n > 0 ? "Ответить всем поочерёдно (\(n))" : "Нет сессий, ждущих ответа")
+        .help(n > 0 ? "Reply to all one by one (\(n))" : "No sessions waiting for a reply")
     }
 
     // A single-select scope row (All / Favorites / Today / 24h / 2d / Week).

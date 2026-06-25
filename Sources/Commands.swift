@@ -12,71 +12,71 @@ struct AppCommands: Commands {
 
         // Search lives in the standard Find menu slot (⌘F).
         CommandGroup(after: .textEditing) {
-            Button("Найти") { model.focusSearchRequested = true }
+            Button("Find") { model.focusSearchRequested = true }
                 .keyboardShortcut("f", modifiers: [.command])
         }
 
         // Keyboard cheat sheet in the Help menu (⌘⇧/).
         CommandGroup(replacing: .help) {
-            Button("Сочетания клавиш") { model.showHotkeyHelp.toggle() }
+            Button("Keyboard Shortcuts") { model.showHotkeyHelp.toggle() }
                 .keyboardShortcut("/", modifiers: [.command, .shift])
         }
 
-        CommandMenu("Сессия") {
-            Button("Открыть в Ghostty") { model.openInTerminal() }
+        CommandMenu("Session") {
+            Button("Open in Terminal") { model.openInTerminal() }
                 .keyboardShortcut(.return, modifiers: [.command])
                 .disabled(model.selectedMeta == nil)
-            Button("Скопировать resume") { model.copyResume() }
+            Button("Copy Resume Command") { model.copyResume() }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
                 .disabled(model.selectedMeta == nil)
-            Button("Показать в Finder") { model.revealInFinder() }
+            Button("Reveal in Finder") { model.revealInFinder() }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(model.selectedMeta == nil)
             Divider()
-            Button("Скрыть сессию") { if let id = model.selectedID { model.hideSession(id) } }
+            Button("Hide Session") { if let id = model.selectedID { model.hideSession(id) } }
                 .keyboardShortcut(.delete, modifiers: [.command])
                 .disabled(model.selectedMeta == nil)
-            Button("Вернуть скрытую (отмена)") { model.unhideLast() }
+            Button("Unhide Last (Undo)") { model.unhideLast() }
                 .keyboardShortcut("z", modifiers: [.control])
             Divider()
             Button(model.selectedMeta.map { model.isFavorite($0.id) } == true
-                   ? "Убрать из избранного" : "В избранное") {
+                   ? "Remove from Favorites" : "Add to Favorites") {
                 if let id = model.selectedID { model.toggleFavorite(id) }
             }
             .keyboardShortcut("d", modifiers: [.command])
             .disabled(model.selectedMeta == nil)
         }
 
-        CommandMenu("Навигация") {
-            Button("Следующая сессия") { model.selectNext(1) }
+        CommandMenu("Navigation") {
+            Button("Next Session") { model.selectNext(1) }
                 .keyboardShortcut(.downArrow, modifiers: [.command])
-            Button("Предыдущая сессия") { model.selectNext(-1) }
+            Button("Previous Session") { model.selectNext(-1) }
                 .keyboardShortcut(.upArrow, modifiers: [.command])
             Divider()
-            Button("Следующее совпадение") { model.nextMatch(1) }
+            Button("Next Match") { model.nextMatch(1) }
                 .keyboardShortcut("g", modifiers: [.command])
                 .disabled(model.matchCount == 0)
-            Button("Предыдущее совпадение") { model.nextMatch(-1) }
+            Button("Previous Match") { model.nextMatch(-1) }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
                 .disabled(model.matchCount == 0)
             Divider()
-            Button("Следующая реплика") { model.jumpTurn(1) }
+            Button("Next Turn") { model.jumpTurn(1) }
                 .keyboardShortcut("]", modifiers: [.command])
-            Button("Предыдущая реплика") { model.jumpTurn(-1) }
+            Button("Previous Turn") { model.jumpTurn(-1) }
                 .keyboardShortcut("[", modifiers: [.command])
         }
 
-        CommandMenu("Вид") {
-            Button(model.briefMode ? "Полный режим" : "Кратко") {
+        CommandMenu("View") {
+            Button(model.briefMode ? "Full View" : "Brief") {
                 model.briefMode.toggle()
             }
             .keyboardShortcut("e", modifiers: [.command])
             Button(model.groupForks
-                   ? "Не группировать ветки сессий"
-                   : "Группировать ветки сессий") {
+                   ? "Ungroup Session Branches"
+                   : "Group Session Branches") {
                 model.groupForks.toggle()
             }
-            Menu("Ветки в диалоге") {
+            Menu("Branches in Dialog") {
                 ForEach(BranchMode.allCases) { mode in
                     Button {
                         model.branchMode = mode
@@ -86,34 +86,34 @@ struct AppCommands: Commands {
                 }
             }
             Divider()
-            Button(model.sidebarCollapsed ? "Показать боковую панель" : "Скрыть боковую панель") {
+            Button(model.sidebarCollapsed ? "Show Sidebar" : "Hide Sidebar") {
                 model.sidebarCollapsed.toggle()
             }
             .keyboardShortcut("b", modifiers: [.command])
-            Button(model.listCollapsed ? "Показать список сессий" : "Скрыть список сессий") {
+            Button(model.listCollapsed ? "Show Session List" : "Hide Session List") {
                 model.listCollapsed.toggle()
             }
             .keyboardShortcut("l", modifiers: [.command, .shift])
-            Button(model.showOutline ? "Скрыть содержание" : "Показать содержание") {
+            Button(model.showOutline ? "Hide Outline" : "Show Outline") {
                 model.showOutline.toggle()
             }
             .keyboardShortcut("b", modifiers: [.command, .shift])
             Divider()
-            Button("Увеличить текст") { model.zoom(0.1) }
+            Button("Increase Text Size") { model.zoom(0.1) }
                 .keyboardShortcut("+", modifiers: [.command])
-            Button("Уменьшить текст") { model.zoom(-0.1) }
+            Button("Decrease Text Size") { model.zoom(-0.1) }
                 .keyboardShortcut("-", modifiers: [.command])
-            Button("Сбросить масштаб") { model.setZoom(1.0) }
+            Button("Reset Zoom") { model.setZoom(1.0) }
                 .keyboardShortcut("0", modifiers: [.command])
             Divider()
-            Button("Больше воздуха") { model.setAir(model.air + 4) }
+            Button("More Spacing") { model.setAir(model.air + 4) }
                 .keyboardShortcut("=", modifiers: [.command, .shift])
-            Button("Меньше воздуха") { model.setAir(model.air - 4) }
+            Button("Less Spacing") { model.setAir(model.air - 4) }
                 .keyboardShortcut("-", modifiers: [.command, .shift])
         }
 
-        CommandMenu("Ответы") {
-            Button("Ответить всем поочерёдно") { model.enterTriage() }
+        CommandMenu("Replies") {
+            Button("Reply to All in Turn") { model.enterTriage() }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
                 .disabled(model.attentionCount == 0)
         }

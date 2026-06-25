@@ -1,130 +1,138 @@
-// Display formatting helpers (Russian locale).
+// Display formatting helpers. Dates, numbers and pluralization follow the
+// user's current locale via the system formatters.
 
 import Foundation
 
 enum Format {
-    static let ru = Locale(identifier: "ru_RU")
-
-    /// Relative time like "2 мин", "5 ч", "3 д", or an absolute date for old items.
+    /// Relative time like "2 min", "5 h", "3 d", or an absolute date for old items.
     static func relativeTime(_ date: Date, now: Date = Date()) -> String {
         let diff = now.timeIntervalSince(date)
         let min = 60.0, hour = 3600.0, day = 86400.0
-        if diff < min { return "сейчас" }
-        if diff < hour { return "\(Int(diff / min)) мин" }
-        if diff < day { return "\(Int(diff / hour)) ч" }
-        if diff < 7 * day { return "\(Int(diff / day)) д" }
-        let f = DateFormatter()
-        f.locale = ru
-        f.dateFormat = "d MMM"
-        return f.string(from: date)
+        if diff < min { return String(localized: "now") }
+        if diff < hour { return relative(Int(diff / min), .minute) }
+        if diff < day { return relative(Int(diff / hour), .hour) }
+        if diff < 7 * day { return relative(Int(diff / day), .day) }
+        return dateFormatted(date, format: "d MMM")
+    }
+
+    private static func relative(_ value: Int, _ unit: NSCalendar.Unit) -> String {
+        let f = DateComponentsFormatter()
+        f.unitsStyle = .abbreviated
+        f.allowedUnits = [unit]
+        f.maximumUnitCount = 1
+        let interval: TimeInterval
+        switch unit {
+        case .minute: interval = Double(value) * 60
+        case .hour: interval = Double(value) * 3600
+        default: interval = Double(value) * 86400
+        }
+        return f.string(from: interval) ?? "\(value)"
     }
 
     /// List timestamp in the mail style: today → time ("11:30"), yesterday →
-    /// "Вчера", the day before → "Позавчера", older → "18.06.2026".
+    /// "Yesterday", older → short numeric date.
     static func mailTime(_ date: Date, now: Date = Date()) -> String {
         let cal = Calendar.current
         if cal.isDate(date, inSameDayAs: now) { return timeOnly(date) }
-        if cal.isDateInYesterday(date) { return "Вчера" }
-        if let twoAgo = cal.date(byAdding: .day, value: -2, to: now),
-           cal.isDate(date, inSameDayAs: twoAgo) { return "Позавчера" }
+        if cal.isDateInYesterday(date) {
+            return RelativeDateTimeFormatter.named.localizedString(from: DateComponents(day: -1))
+        }
         let f = DateFormatter()
-        f.locale = ru
-        f.dateFormat = "dd.MM.yyyy"
+        f.locale = .current
+        f.dateStyle = .short
+        f.timeStyle = .none
         return f.string(from: date)
     }
 
-    /// Time only, e.g. "14:25".
+    /// Time only, e.g. "14:25" / "2:25 PM" depending on locale.
     static func timeOnly(_ date: Date) -> String {
         let f = DateFormatter()
-        f.locale = ru
-        f.dateFormat = "HH:mm"
+        f.locale = .current
+        f.dateStyle = .none
+        f.timeStyle = .short
         return f.string(from: date)
     }
 
-    /// Time if the date is today, otherwise date + time: "14:25" / "16 июн 14:25".
+    /// Time if the date is today, otherwise date + time.
     static func timeOrDate(_ date: Date, now: Date = Date()) -> String {
         if Calendar.current.isDate(date, inSameDayAs: now) { return timeOnly(date) }
-        let f = DateFormatter()
-        f.locale = ru
-        f.dateFormat = "d MMM HH:mm"
-        return f.string(from: date)
+        return dateFormatted(date, format: "d MMM HH:mm")
     }
 
-    /// Long date with time, e.g. "16 июня 2026, 14:25".
+    /// Long date with time, e.g. "16 June 2026, 14:25".
     static func longDateTime(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.locale = ru
-        f.dateFormat = "d MMMM yyyy, HH:mm"
-        return f.string(from: date)
+        dateFormatted(date, format: "d MMMM yyyy, HH:mm")
     }
 
-    /// Compact "16 июня".
+    /// Compact "16 June".
     static func shortDate(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.locale = ru
-        f.dateFormat = "d MMMM"
-        return f.string(from: date)
+        dateFormatted(date, format: "d MMMM")
     }
 
-    /// Span across a session: same day → "16 июня 2026"; across days → "16 → 17 июня 2026".
+    /// Span across a session: same day → "16 June 2026"; across days → "16 → 17 June 2026".
     static func dateRange(_ first: Date?, _ last: Date?) -> String {
         guard let last = last else { return "" }
         guard let first = first, !Calendar.current.isDate(first, inSameDayAs: last) else {
-            let f = DateFormatter(); f.locale = ru; f.dateFormat = "d MMMM yyyy"
-            return f.string(from: last)
+            return dateFormatted(last, format: "d MMMM yyyy")
         }
         let cal = Calendar.current
-        let dayF = DateFormatter(); dayF.locale = ru; dayF.dateFormat = "d"
-        let fullF = DateFormatter(); fullF.locale = ru; fullF.dateFormat = "d MMMM yyyy"
-        // Same month/year → "16 → 17 июня 2026"
+        // Same month/year → "16 → 17 June 2026"
         if cal.isDate(first, equalTo: last, toGranularity: .month) {
-            return "\(dayF.string(from: first)) → \(fullF.string(from: last))"
+            return "\(dateFormatted(first, format: "d")) → \(dateFormatted(last, format: "d MMMM yyyy"))"
         }
-        return "\(fullF.string(from: first)) → \(fullF.string(from: last))"
+        return "\(dateFormatted(first, format: "d MMMM yyyy")) → \(dateFormatted(last, format: "d MMMM yyyy"))"
     }
 
-    /// Session span with times, like the mock: same day → "16 июня 14:25 → 18:40";
-    /// across days → "16 июня 22:11 → 17 июня 00:40". Empty if no end time.
+    /// Session span with times: same day → "16 June 14:25 → 18:40";
+    /// across days → "16 June 22:11 → 17 June 00:40". Empty if no end time.
     static func activitySpan(_ first: Date?, _ last: Date?) -> String {
         guard let last = last else { return "" }
-        let timeF = DateFormatter(); timeF.locale = ru; timeF.dateFormat = "HH:mm"
-        let dayTimeF = DateFormatter(); dayTimeF.locale = ru; dayTimeF.dateFormat = "d MMMM HH:mm"
-        guard let first = first else { return dayTimeF.string(from: last) }
-        let lhs = dayTimeF.string(from: first)
+        guard let first = first else { return dateFormatted(last, format: "d MMMM HH:mm") }
+        let lhs = dateFormatted(first, format: "d MMMM HH:mm")
         let rhs = Calendar.current.isDate(first, inSameDayAs: last)
-            ? timeF.string(from: last)
-            : dayTimeF.string(from: last)
+            ? dateFormatted(last, format: "HH:mm")
+            : dateFormatted(last, format: "d MMMM HH:mm")
         return "\(lhs) → \(rhs)"
     }
 
-    /// Human file size: "12 КБ", "3.4 МБ".
+    /// Locale-aware date formatting from a template (reorders fields per locale).
+    private static func dateFormatted(_ date: Date, format template: String) -> String {
+        let f = DateFormatter()
+        f.locale = .current
+        f.setLocalizedDateFormatFromTemplate(template)
+        return f.string(from: date)
+    }
+
+    /// Human file size via the system byte-count formatter ("12 KB", "3.4 MB").
     static func byteSize(_ bytes: Int) -> String {
-        let kb = 1024.0, mb = kb * 1024
-        if Double(bytes) < kb { return "\(bytes) Б" }
-        if Double(bytes) < mb { return "\(Int((Double(bytes) / kb).rounded())) КБ" }
-        let m = Double(bytes) / mb
-        return m < 10 ? String(format: "%.1f МБ", m) : "\(Int(m.rounded())) МБ"
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
     }
 
-    /// Pluralize "сообщение/сообщения/сообщений".
+    /// Message count with English pluralization, e.g. "1 message" / "5 messages".
     static func messagesWord(_ n: Int) -> String {
-        let mod10 = n % 10, mod100 = n % 100
-        if mod10 == 1 && mod100 != 11 { return "\(n) сообщение" }
-        if (2...4).contains(mod10) && !(12...14).contains(mod100) { return "\(n) сообщения" }
-        return "\(n) сообщений"
+        "\(n) " + (n == 1 ? "message" : "messages")
     }
 
-    /// Section bucket for the list (Сегодня / Вчера / На этой неделе / older month).
+    /// Section bucket for the list (Today / Yesterday / This Week / older month).
     enum Bucket: Int { case today, yesterday, week, older }
 
     static func bucket(_ date: Date, now: Date = Date()) -> (Bucket, String) {
         let cal = Calendar.current
-        if cal.isDateInToday(date) { return (.today, "СЕГОДНЯ") }
-        if cal.isDateInYesterday(date) { return (.yesterday, "ВЧЕРА") }
+        if cal.isDateInToday(date) { return (.today, String(localized: "TODAY")) }
+        if cal.isDateInYesterday(date) { return (.yesterday, String(localized: "YESTERDAY")) }
         if let weekAgo = cal.date(byAdding: .day, value: -7, to: now), date > weekAgo {
-            return (.week, "НА ЭТОЙ НЕДЕЛЕ")
+            return (.week, String(localized: "THIS WEEK"))
         }
-        let f = DateFormatter(); f.locale = ru; f.dateFormat = "LLLL yyyy"
-        return (.older, f.string(from: date).uppercased())
+        return (.older, dateFormatted(date, format: "LLLL yyyy").uppercased())
     }
+}
+
+private extension RelativeDateTimeFormatter {
+    static let named: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.locale = .current
+        f.dateTimeStyle = .named
+        f.unitsStyle = .full
+        return f
+    }()
 }

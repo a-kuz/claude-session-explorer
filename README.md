@@ -1,82 +1,100 @@
 # Session Explorer (macOS)
 
-Нативное macOS-приложение (SwiftUI) для навигации по сессиям Claude Code
-(`~/.claude/projects/*.jsonl`). Порт TUI `session-explorer-2` с тем же
-функционалом и дизайном из макета «Session Explorer — macOS».
+A native macOS app (SwiftUI) for browsing Claude Code sessions
+(`~/.claude/projects/*.jsonl`) — search across every conversation, read
+transcripts comfortably, and resume any session in your terminal.
 
-## Возможности
+![Session Explorer — sidebar, session list, conversation, and outline](assets/screenshoot-3.png)
 
-- **Три колонки**: боковая панель (Все сессии / Избранное / проекты / период),
-  список сессий с группировкой по датам (Сегодня / Вчера / На этой неделе / по
-  месяцам), и просмотр диалога.
-- **Заголовки**: `custom-title` → `ai-title`; если их нет — лениво генерируется
-  детерминированный заголовок из первого осмысленного запроса (без сети/LLM).
-- **Быстрый поиск** по всему тексту сессий: мгновенный по заголовкам/последним
-  репликам + глубокий инкрементальный по всему диалогу (blob строится лениво и
-  кешируется). AND-семантика по словам, плюс regex через `/pattern/`.
-  Подсветка совпадений в списке и в диалоге.
-- **Реплики (turns)**: смежные сообщения одной стороны сливаются в одну реплику
-  (без россыпи аватаров); промежуточный tool-пинг-понг свёрнут в одну реплику
-  Claude. Tool-вызовы показаны компактной строкой `Read³ · Write · ssh · cargo²`
-  и раскрываются по клику; вывод инструментов скрыт по умолчанию.
-- **Компактный режим «кратко»** (`r`): прячет всю tool-машинерию и промежуточные
-  размышления, оставляя только реплики и финальный ответ перед каждой репликой.
-- **Навигация по совпадениям** (`n`/`N`) и **по собственным репликам** (`[`/`]`)
-  с капсулой-счётчиком.
-- **Открытие в терминале**: `o` открывает сессию в терминале и выполняет
-  `claude --resume <id>` в каталоге проекта. Терминал выбирается в настройках —
-  Ghostty (по умолчанию), Terminal.app или iTerm2; для Ghostty приложение через
-  AppleScript находит уже открытую вкладку с этой сессией или создаёт новую.
-  `y` — копирует команду resume.
-- **Realtime**: каталог сессий наблюдается через FSEvents; список и открытый
-  диалог обновляются по мере записи новых реплик Claude Code.
-- **Инспектор** (сведения о сессии: проект, число сообщений, даты, модель, ID).
+Full-text search across sessions, with matches highlighted in the list and the
+transcript:
 
-## Сборка
+![Full-text search across sessions](assets/screenshoot-search.png)
 
-Требуется [XcodeGen](https://github.com/yonyz/XcodeGen) и Xcode.
+## Features
+
+- **Three columns**: a sidebar (All Sessions / Favorites / projects / time
+  range), a session list grouped by date (Today / Yesterday / This Week / by
+  month), and the conversation view.
+- **Titles**: `custom-title` → `ai-title`; when neither exists, a deterministic
+  title is generated lazily from the first meaningful prompt (no network/LLM).
+- **Fast search** across the full text of sessions: instant matching on
+  titles/last replies plus a deep incremental scan of the whole conversation
+  (the blob is built lazily and cached). AND semantics across words, plus regex
+  via `/pattern/`. Matches are highlighted in both the list and the transcript.
+- **Replies (turns)**: adjacent messages from the same side merge into one
+  reply (no scatter of avatars); the intermediate tool ping-pong is collapsed
+  into a single Claude reply. Tool calls show as a compact line
+  `Read³ · Write · ssh · cargo²` and expand on click; tool output is hidden by
+  default.
+- **Brief mode** (⌘E): hides all tool machinery and intermediate thinking,
+  leaving just the replies and the final answer before each reply.
+- **Match navigation** (⌘G / ⌘⇧G) and **reply navigation** (⌘[ / ⌘]) with a
+  counter capsule.
+- **Open in a terminal** (⌘↩): resumes the session by running
+  `claude --resume <id>` in the project directory. The terminal is chosen in
+  Settings — Ghostty (default), Terminal.app, or iTerm2; for Ghostty the app
+  uses AppleScript to focus an already-open tab for that session or to create a
+  new one. ⌘⇧C copies the resume command.
+- **Realtime**: the sessions directory is watched via FSEvents; the list and the
+  open conversation update as Claude Code writes new replies.
+- **Inspector** (session details: project, message count, dates, model, ID).
+
+## Build
+
+Requires [XcodeGen](https://github.com/yonyz/XcodeGen) and Xcode.
 
 ```sh
 xcodegen generate
 xcodebuild -project SessionExplorer.xcodeproj -scheme SessionExplorer -configuration Release build
-# либо открыть SessionExplorer.xcodeproj в Xcode и нажать Run
+# or open SessionExplorer.xcodeproj in Xcode and hit Run
 ```
 
-Приложение работает без сэндбокса (нужен доступ к `~/.claude` и Apple Events для
-интеграции с терминалом; разрешите Automation для выбранного терминала при первом
-запуске `o`: System Settings → Privacy → Automation).
+The app runs without the sandbox (it needs access to `~/.claude` and Apple
+Events for terminal integration; allow Automation for the chosen terminal on the
+first `Open in Terminal`: System Settings → Privacy → Automation).
 
-## Хоткеи
+## Keyboard shortcuts
 
-| Клавиша | Действие |
+| Key | Action |
 |---|---|
-| `↑` `↓` / `j` `k` | навигация по списку сессий |
-| `/` | фокус в поле поиска |
-| `Esc` | очистить поиск |
-| `o` | открыть в терминале |
-| `y` | скопировать команду resume |
-| `r` (или ⌘R) | компактный режим «кратко» |
-| `f` (или ⌘F-меню) | скрыть/показать боковую панель |
-| `n` / `N` (⌥G / ⌥⇧G) | следующее / предыдущее совпадение |
-| `[` / `]` (⌘[ / ⌘]) | предыдущая / следующая моя реплика |
-| ⌘D | в избранное |
-| ⌘⇧R | показать в Finder |
-| ⌥⌘I | инспектор (сведения) |
+| `⌘↑` / `⌘↓` | previous / next session |
+| `↑` / `↓` | navigate replies once the transcript is focused |
+| `⌘F` | focus search |
+| `Esc` | clear search |
+| `⌘↩` | open session in terminal |
+| `⌘⇧C` | copy resume command |
+| `⌘E` | brief mode |
+| `⌘B` | show / hide sidebar |
+| `⌘⇧B` | show / hide outline |
+| `⌘⇧L` | show / hide session list |
+| `⌘G` / `⌘⇧G` | next / previous match |
+| `[` / `]` (or `⌘[` / `⌘]`) | previous / next reply |
+| `⌃⌘[` / `⌃⌘]` | first / last reply |
+| `⌘D` | toggle favorite |
+| `⌘⌫` | hide session · `⌃Z` undo hide |
+| `⌘⇧R` | reveal in Finder |
+| `⌘+` / `⌘-` / `⌘0` | zoom text in / out / reset |
+| `⌘⇧T` | triage mode (reply to all in turn) |
+| `⌘⌃F` | toggle full screen |
 
-## Архитектура
+## Architecture
 
-- `Sources/Core/Loader.swift` — параллельное (concurrentPerform) сканирование
-  `~/.claude/projects`, парсинг jsonl в метаданные с кешем по mtime, ленивая
-  полная загрузка диалога с process-wide кешем.
-- `Sources/Core/Content.swift` — извлечение текста из форм `message.content`,
-  отсев служебного шума (`<command-*>`, caveats, reminders и т.п.).
-- `Sources/Core/Search.swift` — двухуровневый отменяемый поиск (cheap + deep),
-  токены/regex, сниппеты.
-- `Sources/Core/AutoTitle.swift` — ленивая эвристическая генерация заголовков.
-- `Sources/Core/OpenSession.swift` — открытие сессии в терминале (Ghostty / Terminal.app
-  / iTerm2) через AppleScript: `claude --resume <id>` в каталоге проекта.
-- `Sources/Core/FolderWatcher.swift` — FSEvents-наблюдение каталога сессий.
-- `Sources/Models/Models.swift` — доменные типы и сборка реплик (`DialogTurn`).
-- `Sources/AppModel.swift` — состояние, фильтры, оркестрация поиска и навигации.
+- `Sources/Core/Loader.swift` — parallel (`concurrentPerform`) scan of
+  `~/.claude/projects`, parsing jsonl into metadata with an mtime-keyed cache,
+  and lazy full-conversation loading with a process-wide cache.
+- `Sources/Core/Content.swift` — text extraction from the `message.content`
+  shapes, filtering service noise (`<command-*>`, caveats, reminders, etc.).
+- `Sources/Core/Search.swift` — two-tier cancellable search (cheap + deep),
+  tokens/regex, snippets.
+- `Sources/Core/AutoTitle.swift` — lazy heuristic title generation.
+- `Sources/Core/OpenSession.swift` — opening a session in a terminal (Ghostty /
+  Terminal.app / iTerm2) via AppleScript: `claude --resume <id>` in the project
+  directory.
+- `Sources/Core/FolderWatcher.swift` — FSEvents watching of the sessions
+  directory.
+- `Sources/Models/Models.swift` — domain types and reply assembly (`DialogTurn`).
+- `Sources/AppModel.swift` — state, filters, and orchestration of search and
+  navigation.
 - `Sources/Views/` — `RootView`, `SidebarView`, `SessionListView`, `DetailView`,
-  `MessageView` (реплики + компактные тулы), `InspectorView`, `Toolbar`.
+  `MessageView` (replies + compact tools), `InspectorView`, `Toolbar`.

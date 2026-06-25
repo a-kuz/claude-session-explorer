@@ -50,7 +50,7 @@ struct SessionListView: View {
     var body: some View {
         Group {
             if model.loading {
-                ProgressView("Сканирование сессий…")
+                ProgressView("Scanning sessions…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(selection: Binding(
@@ -65,7 +65,7 @@ struct SessionListView: View {
                             }
                         } header: {
                             HStack {
-                                Text("\(model.hits.count) совпадений")
+                                Text("\(model.hits.count) matches")
                                 Spacer()
                                 Text("«\(model.query)»").foregroundStyle(.tertiary)
                             }
@@ -102,20 +102,20 @@ struct SessionListView: View {
 
     @ViewBuilder
     private func rowMenu(_ meta: SessionMeta) -> some View {
-        Button(model.isFavorite(meta.id) ? "Убрать из избранного" : "В избранное") {
+        Button(model.isFavorite(meta.id) ? "Remove from Favorites" : "Add to Favorites") {
             model.toggleFavorite(meta.id)
         }
         if meta.needsAttention {
             if model.needsAttention(meta) {
-                Button("Снять отметку «ждёт ответа»") { model.dismissAttention(meta.id) }
+                Button("Clear “Needs Reply” mark") { model.dismissAttention(meta.id) }
             } else {
-                Button("Вернуть отметку «ждёт ответа»") { model.restoreAttention(meta.id) }
+                Button("Restore “Needs Reply” mark") { model.restoreAttention(meta.id) }
             }
         }
         Divider()
-        Button("Скрыть сессию") { model.hideSession(meta.id) }
-        Button("Открыть в Ghostty") { model.selectedID = meta.id; model.openInTerminal() }
-        Button("Показать в Finder") { model.selectedID = meta.id; model.revealInFinder() }
+        Button("Hide Session") { model.hideSession(meta.id) }
+        Button("Open in Terminal") { model.selectedID = meta.id; model.openInTerminal() }
+        Button("Reveal in Finder") { model.selectedID = meta.id; model.revealInFinder() }
     }
 }
 

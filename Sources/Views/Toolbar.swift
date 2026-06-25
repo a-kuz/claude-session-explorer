@@ -11,7 +11,7 @@ struct MainToolbar: ToolbarContent {
             Button { model.sidebarCollapsed.toggle() } label: {
                 Image(systemName: "sidebar.left")
             }
-            .help("Боковая панель (⌘B)")
+            .help("Sidebar (⌘B)")
         }
 
         if !model.triageMode {
@@ -26,7 +26,7 @@ struct MainToolbar: ToolbarContent {
                 Button { model.showOutline.toggle() } label: {
                     Image(systemName: "sidebar.right")
                 }
-                .help("Содержание (⌘⇧B)")
+                .help("Outline (⌘⇧B)")
             }
         }
     }
@@ -107,12 +107,12 @@ struct ToolbarSearchField: View {
                             Image(systemName: "chevron.up").font(.system(size: 10, weight: .semibold))
                         }
                         .buttonStyle(.plain).foregroundStyle(Color(hex: 0x9AA0AA))
-                        .help("Предыдущее совпадение (⌘⇧G)")
+                        .help("Previous match (⌘⇧G)")
                         Button { model.nextMatch(1) } label: {
                             Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold))
                         }
                         .buttonStyle(.plain).foregroundStyle(Color(hex: 0x9AA0AA))
-                        .help("Следующее совпадение (⌘G)")
+                        .help("Next match (⌘G)")
                     }
                 } else {
                     Text("\(model.hits.count)")

@@ -16,7 +16,7 @@ final class AppModel: ObservableObject {
     // Sidebar filtering is TWO independent axes, applied together:
     //  • `scope`  — a single-select folder / time window.
     //  • `selectedProjectPaths` — multi-select projects, layered on top of scope
-    //    (and on top of "Требует ответа").
+    //    (and on top of "Needs reply").
     enum Scope: Hashable {
         case all
         case favorites
@@ -111,7 +111,7 @@ final class AppModel: ObservableObject {
     /// True while the transcript (detail) holds keyboard focus — bare ↑/↓ then
     /// navigate replies instead of moving the session selection.
     @Published var transcriptHasFocus = false
-    /// Compact "кратко" mode (hotkey r): hide tool machinery and intermediate
+    /// Compact "compact" mode (hotkey r): hide tool machinery and intermediate
     /// assistant prose, keeping only prompts + the reply just before each prompt.
     @Published var briefMode = false {
         didSet { if briefMode != oldValue { rebuildTurns(); persistUIState() } }
@@ -156,7 +156,7 @@ final class AppModel: ObservableObject {
     /// Persist the current widths (call on drag end).
     func commitWidths() { persistUIState() }
 
-    /// "Ответь всем поочерёдно": a dedicated full-window triage screen that walks
+    /// "Reply to all in turn": a dedicated full-window triage screen that walks
     /// the sessions waiting on a reply, one at a time. Not a sidebar filter — a
     /// separate mode the whole window switches into.
     @Published var triageMode = false
@@ -164,7 +164,7 @@ final class AppModel: ObservableObject {
     @Published var triageIndex = 0
 
     /// Sessions still waiting on the user, newest first — the triage queue and
-    /// the "Требует ответа" badge count both come from here.
+    /// the "Needs reply" badge count both come from here.
     var attentionSessions: [SessionMeta] {
         allSessions
             .filter { !hidden.contains($0.id) && needsAttention($0) && passesProjects($0) }
@@ -195,7 +195,7 @@ final class AppModel: ObservableObject {
         selectedID = q[triageIndex].id
     }
     func triageSkip() { triageAdvance() }
-    /// Mark the current session as handled ("не требует ответа") and move on.
+    /// Mark the current session as handled ("no reply needed") and move on.
     func triageResolve() {
         if let id = triageCurrent?.id { dismissAttention(id) }
         // The queue shrank under us — keep the same index (now points at the next).
@@ -930,14 +930,14 @@ final class AppModel: ObservableObject {
     // MARK: - Copy blocks (from the outline selection)
 
     /// Plain-text transcript of the given blocks, in conversation order, with
-    /// each turn labelled ("Вы:" / "Claude:") and tool calls (name · arg, then
+    /// each turn labelled ("You:" / "Claude:") and tool calls (name · arg, then
     /// their output) rendered in place — so the copy is the full exchange.
     func copyText(forBlockIDs ids: Set<String>) -> String {
         let chosen = blocks.filter { ids.contains($0.id) }
         var out: [String] = []
         for block in chosen {
             for turn in block.turns {
-                let who = turn.role == .user ? "Вы" : "Claude"
+                let who = turn.role == .user ? "You" : "Claude"
                 let body = turnPlainText(turn)
                 guard !body.isEmpty else { continue }
                 out.append("\(who):\n\(body)")
@@ -990,7 +990,7 @@ final class AppModel: ObservableObject {
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)
-        showToast("Скопировано блоков: \(ids.count)")
+        showToast("Blocks copied: \(ids.count)")
     }
 
     // MARK: - Favorites
@@ -1021,7 +1021,7 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(Array(hidden), forKey: hiddenKey)
         recomputeHits(instant: true)
         selectedID = id
-        showToast("Сессия возвращена")
+        showToast("Session restored")
     }
 
     func isHidden(_ id: String) -> Bool { hidden.contains(id) }
@@ -1090,6 +1090,6 @@ final class AppModel: ObservableObject {
         Task.detached(priority: .userInitiated) { [weak self] in
             await self?.sync(initial: true)
         }
-        showToast("Кеш сброшен — пересчёт метаданных")
+        showToast("Cache reset — recomputing metadata")
     }
 }

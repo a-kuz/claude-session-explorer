@@ -11,49 +11,49 @@ struct HotkeyHelpView: View {
     private struct Group: Identifiable { let id = UUID(); let title: String; let items: [Item] }
 
     private let groups: [Group] = [
-        Group(title: "Навигация", items: [
-            Item(keys: "⌘↓ / ⌘↑", label: "Следующая / предыдущая сессия"),
-            Item(keys: "⌘] / ⌘[", label: "Следующая / предыдущая реплика"),
-            Item(keys: "⌘G / ⌘⇧G", label: "Следующее / предыдущее совпадение"),
+        Group(title: "Navigation", items: [
+            Item(keys: "⌘↓ / ⌘↑", label: "Next / previous session"),
+            Item(keys: "⌘] / ⌘[", label: "Next / previous turn"),
+            Item(keys: "⌘G / ⌘⇧G", label: "Next / previous match"),
         ]),
-        Group(title: "Поиск", items: [
-            Item(keys: "⌘F", label: "Найти"),
-            Item(keys: "Esc", label: "Сбросить поиск"),
+        Group(title: "Search", items: [
+            Item(keys: "⌘F", label: "Find"),
+            Item(keys: "Esc", label: "Clear search"),
         ]),
-        Group(title: "Вид", items: [
-            Item(keys: "⌘B", label: "Боковая панель"),
-            Item(keys: "⌘⇧B", label: "Содержание"),
-            Item(keys: "⌘E", label: "Кратко / полно"),
-            Item(keys: "⌘+ / ⌘−", label: "Масштаб текста"),
-            Item(keys: "⌘0", label: "Сбросить масштаб"),
-            Item(keys: "⌘⇧= / ⌘⇧−", label: "Больше / меньше воздуха"),
+        Group(title: "View", items: [
+            Item(keys: "⌘B", label: "Sidebar"),
+            Item(keys: "⌘⇧B", label: "Outline"),
+            Item(keys: "⌘E", label: "Brief / full"),
+            Item(keys: "⌘+ / ⌘−", label: "Text zoom"),
+            Item(keys: "⌘0", label: "Reset zoom"),
+            Item(keys: "⌘⇧= / ⌘⇧−", label: "More / less spacing"),
         ]),
-        Group(title: "Сессия", items: [
-            Item(keys: "⌘↵", label: "Открыть в Ghostty"),
-            Item(keys: "⌘⇧C", label: "Скопировать resume"),
-            Item(keys: "⌘⇧R", label: "Показать в Finder"),
-            Item(keys: "⌘D", label: "В избранное"),
-            Item(keys: "⌘⌫", label: "Скрыть сессию"),
+        Group(title: "Session", items: [
+            Item(keys: "⌘↵", label: "Open in Terminal"),
+            Item(keys: "⌘⇧C", label: "Copy resume command"),
+            Item(keys: "⌘⇧R", label: "Reveal in Finder"),
+            Item(keys: "⌘D", label: "Add to favorites"),
+            Item(keys: "⌘⌫", label: "Hide session"),
         ]),
-        Group(title: "Ответы", items: [
-            Item(keys: "⌘⇧T", label: "Ответить всем поочерёдно"),
-            Item(keys: "⌘↵", label: "Ответить и дальше (в триаже)"),
-            Item(keys: "⌥X", label: "Не требует ответа (в триаже)"),
-            Item(keys: "⌥→", label: "Пропустить (в триаже)"),
+        Group(title: "Replies", items: [
+            Item(keys: "⌘⇧T", label: "Reply to all in turn"),
+            Item(keys: "⌘↵", label: "Reply and continue (in triage)"),
+            Item(keys: "⌥X", label: "No reply needed (in triage)"),
+            Item(keys: "⌥→", label: "Skip (in triage)"),
         ]),
     ]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Text("Сочетания клавиш").font(.system(size: 15, weight: .semibold))
+                Text("Keyboard Shortcuts").font(.system(size: 15, weight: .semibold))
                 Spacer()
                 Text("Esc")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(Theme.tertiaryText)
                     .padding(.horizontal, 7).padding(.vertical, 2)
                     .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5))
-                Button("Закрыть") { dismiss() }
+                Button("Close") { dismiss() }
                     .buttonStyle(.plain)
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(Theme.accent)

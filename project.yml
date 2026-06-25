@@ -32,7 +32,7 @@ targets:
         NSHumanReadableCopyright: ""
         NSPrincipalClass: NSApplication
         LSApplicationCategoryType: public.app-category.developer-tools
-        NSAppleEventsUsageDescription: "Session Explorer открывает выбранную сессию в новой вкладке терминала."
+        NSAppleEventsUsageDescription: "Session Explorer opens the selected session in a new terminal tab."
     entitlements:
       path: Sources/SessionExplorer.entitlements
       properties:

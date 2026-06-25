@@ -6,8 +6,7 @@
 // or window from a `surface configuration` that runs a `command` in an
 // `initial working directory`. That lets us:
 //   1. Jump to an already-open session's terminal instead of spawning a new one.
-//   2. Launch `claude --resume <id>` natively — no clipboard / key-code hacks,
-//      so it's layout-independent (the Warp approach's whole reason to exist).
+//   2. Launch `claude --resume <id>` natively, independent of keyboard layout.
 
 import AppKit
 import Foundation
@@ -126,7 +125,7 @@ enum OpenSession {
     /// launch a fresh tab/window. Never throws.
     ///
     /// Matching a live session: while Claude Code runs, Ghostty's terminal title
-    /// is the session's title (e.g. "✳ Добавить анимацию…") — Claude pushes it
+    /// is the session's title (e.g. "✳ Add animation…") — Claude pushes it
     /// via OSC. So we match the terminal whose title CONTAINS the session title;
     /// `working directory` is an unreliable fallback (it tracks the shell's cwd,
     /// which stays at $HOME while `claude` runs as the foreground command).
@@ -181,18 +180,18 @@ enum OpenSession {
         if result.code == 0 {
             let how: String
             switch result.out {
-            case "focused": how = "переход к открытой сессии"
-            case "newwindow": how = "новое окно"
-            default: how = "новая вкладка"
+            case "focused": how = "switched to open session"
+            case "newwindow": how = "new window"
+            default: how = "new tab"
             }
             return OpenResult(ok: true, message: "Ghostty: \(how) — \(meta.id.prefix(8))")
         }
         let hint = result.err.range(of: "not allowed|assistive|accessibility|-1743|-1728",
                                     options: .regularExpression) != nil
-            ? " — разрешите Automation для Ghostty: System Settings → Privacy → Automation"
+            ? " — grant Automation access for Ghostty: System Settings → Privacy → Automation"
             : ""
         let detail = result.err.trimmingCharacters(in: .whitespacesAndNewlines)
-        return OpenResult(ok: false, message: "Ghostty вернул ошибку\(hint): \(detail.isEmpty ? "\(result.code)" : detail)")
+        return OpenResult(ok: false, message: "Ghostty returned an error\(hint): \(detail.isEmpty ? "\(result.code)" : detail)")
     }
 
     /// Terminal.app and iTerm have no Ghostty-style surface API; we just `do script`
@@ -225,21 +224,21 @@ enum OpenSession {
     private static func runTerminalScript(_ script: String, app: String, meta: SessionMeta) -> OpenResult {
         let result = runOsascript(script)
         if result.code == 0 {
-            return OpenResult(ok: true, message: "\(app): новая сессия — \(meta.id.prefix(8))")
+            return OpenResult(ok: true, message: "\(app): new session — \(meta.id.prefix(8))")
         }
         let hint = result.err.range(of: "not allowed|assistive|accessibility|-1743|-1728",
                                     options: .regularExpression) != nil
-            ? " — разрешите Automation для \(app): System Settings → Privacy → Automation"
+            ? " — grant Automation access for \(app): System Settings → Privacy → Automation"
             : ""
         let detail = result.err.trimmingCharacters(in: .whitespacesAndNewlines)
-        return OpenResult(ok: false, message: "\(app) вернул ошибку\(hint): \(detail.isEmpty ? "\(result.code)" : detail)")
+        return OpenResult(ok: false, message: "\(app) returned an error\(hint): \(detail.isEmpty ? "\(result.code)" : detail)")
     }
 
     @discardableResult
     static func copyResumeCommand(_ meta: SessionMeta) -> OpenResult {
         setClipboard(buildResumeCommand(meta))
-            ? OpenResult(ok: true, message: "Команда resume скопирована в буфер")
-            : OpenResult(ok: false, message: "буфер обмена недоступен")
+            ? OpenResult(ok: true, message: "Resume command copied to clipboard")
+            : OpenResult(ok: false, message: "clipboard is unavailable")
     }
 
     static func revealInFinder(_ meta: SessionMeta) {
