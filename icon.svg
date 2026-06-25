@@ -1,0 +1,57 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Подложка иконки: почти белая с едва заметным вертикальным градиентом -->
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f1f2f4"/>
+    </linearGradient>
+    <!-- Серый градиент для активного пузыря -->
+    <linearGradient id="bubble" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8a8f98"/>
+      <stop offset="1" stop-color="#6f747d"/>
+    </linearGradient>
+    <!-- Мягкая тень под содержимым -->
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="14" flood-color="#3a3d42" flood-opacity="0.18"/>
+    </filter>
+    <!-- Маска со скруглением в стиле macOS (squircle-приближение) -->
+    <clipPath id="round">
+      <rect x="92" y="92" width="840" height="840" rx="188" ry="188"/>
+    </clipPath>
+  </defs>
+
+  <!-- Подложка -->
+  <g clip-path="url(#round)">
+    <rect x="92" y="92" width="840" height="840" fill="url(#plate)"/>
+    <!-- тонкая внутренняя рамка для аккуратного края -->
+    <rect x="92.5" y="92.5" width="839" height="839" rx="188" fill="none" stroke="#e2e4e7" stroke-width="1"/>
+  </g>
+
+  <!-- Стек карточек диалога: единица навигации приложения (block) -->
+  <g filter="url(#soft)">
+    <!-- задняя карточка (свёрнутая) -->
+    <rect x="318" y="252" width="388" height="120" rx="34" fill="#e4e6e9"/>
+    <!-- средняя карточка -->
+    <rect x="300" y="398" width="424" height="150" rx="38" fill="#d4d7db"/>
+    <!-- активный пузырь — серый акцент -->
+    <rect x="282" y="576" width="460" height="196" rx="44" fill="url(#bubble)"/>
+  </g>
+
+  <!-- Строки текста внутри активного пузыря -->
+  <g fill="#ffffff" opacity="0.92">
+    <rect x="330" y="628" width="364" height="20" rx="10"/>
+    <rect x="330" y="668" width="320" height="20" rx="10"/>
+    <rect x="330" y="708" width="220" height="20" rx="10"/>
+  </g>
+
+  <!-- Строки в средней карточке -->
+  <g fill="#9aa0a8">
+    <rect x="346" y="446" width="300" height="16" rx="8"/>
+    <rect x="346" y="478" width="240" height="16" rx="8"/>
+  </g>
+
+  <!-- Строка в задней карточке -->
+  <g fill="#b6bbc1">
+    <rect x="364" y="300" width="248" height="14" rx="7"/>
+  </g>
+</svg>
