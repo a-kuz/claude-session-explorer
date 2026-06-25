@@ -62,7 +62,7 @@ struct TurnView: View {
         if isUser {
             // A user prompt renders as a section heading: an accent/grey rule down
             // the left, the prompt text at 15/600, the time to the right — no
-            // avatar, no "Вы". (Matches the design mock.)
+            // avatar, no "You". (Matches the design mock.)
             userHeading
         } else {
             // Claude's reply: just the prose, flush under the prompt above it.
@@ -325,7 +325,7 @@ struct TableBlock: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: s(6)))
         .fixedSize(horizontal: false, vertical: true)
-        .help("\(columnCount) колонок")
+        .help("\(columnCount) columns")
     }
 
     private func cellText(_ value: String, isHeader: Bool) -> Text {
@@ -637,7 +637,7 @@ struct ToolChip: View {
                 // Output longer than the preview → reveal the rest on click.
                 if outputLineCount > Self.outputPreviewLines {
                     Button { outputFull.toggle() } label: {
-                        Text(outputFull ? "Свернуть вывод" : "Показать вывод полностью (\(outputLineCount) строк)")
+                        Text(outputFull ? "Collapse output" : "Show full output (\(outputLineCount) lines)")
                             .font(.system(size: 10.5 * scale))
                             .foregroundStyle(Color(hex: 0x8AB4F8))
                             .padding(.horizontal, s(11)).padding(.bottom, s(9))

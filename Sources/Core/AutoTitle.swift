@@ -7,8 +7,10 @@ enum AutoTitle {
     private static var cache: [String: String] = [:]
     private static let lock = NSLock()
 
+    // Polite lead-ins to strip from generated titles, in both English and
+    // Russian — sessions are commonly authored in either language.
     private static let leadingFiller = try! NSRegularExpression(
-        pattern: "^(пожалуйста|плиз|please|можешь|could you|can you|нужно|надо|сделай|сделать|давай|let's|lets)\\s+",
+        pattern: "^(please|could you|can you|let's|lets|пожалуйста|плиз|можешь|нужно|надо|сделай|сделать|давай)\\s+",
         options: [.caseInsensitive])
 
     private static func clean(_ text: String) -> String {
@@ -54,7 +56,7 @@ enum AutoTitle {
         if let cached = cache[meta.id] { lock.unlock(); return cached }
         lock.unlock()
         let source = meta.firstUserText.isEmpty ? meta.lastUserText : meta.firstUserText
-        let generated = source.isEmpty ? "(пустая сессия)" : capitalize(firstClause(source))
+        let generated = source.isEmpty ? "(empty session)" : capitalize(firstClause(source))
         lock.lock()
         cache[meta.id] = generated
         lock.unlock()

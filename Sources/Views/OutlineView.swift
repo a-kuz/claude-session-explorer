@@ -41,13 +41,13 @@ struct OutlineView: View {
             if selection.count > 1 {
                 Divider()
                 HStack(spacing: 8) {
-                    Text("Выбрано: \(selection.count)")
+                    Text("Selected: \(selection.count)")
                         .scaledFont(11).foregroundStyle(.secondary)
                     Spacer()
-                    Button { selection = [] } label: { Text("Сброс").scaledFont(11) }
+                    Button { selection = [] } label: { Text("Clear").scaledFont(11) }
                         .buttonStyle(.plain).foregroundStyle(.secondary)
                     Button { model.copyBlocksToClipboard(selection) } label: {
-                        Label("Копировать", systemImage: "doc.on.doc").scaledFont(11)
+                        Label("Copy", systemImage: "doc.on.doc").scaledFont(11)
                     }
                     .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
                 }
@@ -101,9 +101,9 @@ struct OutlineView: View {
         .padding(.vertical, s(1))
         .id(turn.id)
         .contextMenu {
-            Button("Копировать этот блок") { model.copyBlocksToClipboard([turn.id]) }
+            Button("Copy This Block") { model.copyBlocksToClipboard([turn.id]) }
             if selection.count > 1 {
-                Button("Копировать выбранные (\(selection.count))") {
+                Button("Copy Selected (\(selection.count))") {
                     model.copyBlocksToClipboard(selection)
                 }
             }

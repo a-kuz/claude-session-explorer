@@ -1,12 +1,19 @@
-// Scanning ~/.claude/projects and parsing session jsonl files.
-// Port of src/lib/loader.ts.
+// Scanning the Claude config's projects/ dir and parsing session jsonl files.
 
 import Foundation
 import AppKit
 
 enum Loader {
-    static let projectsDir = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".claude/projects")
+    /// `<config>/projects`, where `<config>` is `$CLAUDE_CONFIG_DIR` if set
+    /// (matching the official CLI), otherwise `~/.claude`.
+    static let projectsDir: URL = {
+        let env = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]?
+            .trimmingCharacters(in: .whitespaces)
+        let config = (env?.isEmpty == false)
+            ? URL(fileURLWithPath: (env! as NSString).expandingTildeInPath)
+            : FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
+        return config.appendingPathComponent("projects")
+    }()
 
     private static let iso: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()

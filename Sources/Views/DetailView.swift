@@ -21,7 +21,7 @@ struct DetailView: View {
             VStack(spacing: 10) {
                 Image(systemName: "bubble.left.and.bubble.right")
                     .scaledFont(40).foregroundStyle(Theme.tertiaryText)
-                Text("Выберите сессию").foregroundStyle(Theme.secondaryText)
+                Text("Select a session").foregroundStyle(Theme.secondaryText)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.white)

@@ -54,7 +54,7 @@ struct BranchBar: View {
         return HStack(spacing: s(6)) {
             Image(systemName: "arrow.triangle.branch")
                 .scaledFont(10.5, weight: .semibold)
-            Text("ветка \(mine?.index ?? 1) из \(mine?.total ?? alts.count)")
+            Text("branch \(mine?.index ?? 1) of \(mine?.total ?? alts.count)")
                 .scaledFont(11, weight: .semibold)
             Rectangle().fill(Theme.accent.opacity(0.25)).frame(height: 1)
         }

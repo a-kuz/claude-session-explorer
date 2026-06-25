@@ -162,9 +162,9 @@ enum BranchMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .activeOnly: return "Активная ветка"
-        case .switcher: return "С переключателем"
-        case .tree: return "Дерево"
+        case .activeOnly: return "Active branch"
+        case .switcher: return "With switcher"
+        case .tree: return "Tree"
         }
     }
 }
@@ -290,7 +290,7 @@ struct DialogTurn: Identifiable, Equatable {
     var outlineTitle: String {
         let first = bodyChunks.first ?? ""
         let oneLine = MessageContent.oneLine(first, max: 80)
-        return oneLine.isEmpty ? (imageCount > 0 ? "вложение" : "…") : oneLine
+        return oneLine.isEmpty ? (imageCount > 0 ? "attachment" : "…") : oneLine
     }
 
     /// Build turns. A "speaker" run is broken only by a *real* user prompt;
@@ -363,7 +363,7 @@ struct DialogTurn: Identifiable, Equatable {
                 i = j
             }
 
-            // Compact "кратко": drop tool machinery; for assistant turns keep
+            // Compact "compact": drop tool machinery; for assistant turns keep
             // only the final prose chunk (the conclusion before the next prompt).
             var omitted = false
             if brief {

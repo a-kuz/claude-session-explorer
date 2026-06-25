@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// "Ответь всем поочерёдно" — a dedicated full-window screen that walks the
+/// "Reply to all in turn" — a dedicated full-window screen that walks the
 /// sessions waiting on a reply one at a time. The composer is presentational for
 /// now (sending replies into Claude Code is a later step); the navigation,
-/// queue, and "не требует ответа" resolution are live.
+/// queue, and "no reply needed" resolution are live.
 struct TriageView: View {
     @EnvironmentObject var model: AppModel
     @State private var draft = ""
@@ -32,14 +32,14 @@ struct TriageView: View {
         HStack(spacing: 10) {
             Image(systemName: "arrowshape.turn.up.left.fill")
                 .font(.system(size: 13)).foregroundStyle(Theme.accent)
-            Text("Ответь всем поочерёдно")
+            Text("Reply to all in turn")
                 .font(.system(size: 14, weight: .semibold))
             let done = model.triageIndex
             Text("\(min(done + 1, queue.count)) / \(queue.count)")
                 .font(.system(size: 12)).monospacedDigit()
                 .foregroundStyle(Theme.tertiaryText)
             Spacer()
-            Button("Выйти") { model.exitTriage() }
+            Button("Exit") { model.exitTriage() }
                 .buttonStyle(.plain)
                 .font(.system(size: 12.5))
                 .padding(.horizontal, 12).frame(height: 28)
@@ -54,7 +54,7 @@ struct TriageView: View {
     private var queueStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                Text("Очередь")
+                Text("Queue")
                     .font(.system(size: 11)).foregroundStyle(Theme.tertiaryText)
                     .padding(.trailing, 2)
                 ForEach(Array(queue.enumerated()), id: \.element.id) { idx, meta in
@@ -110,7 +110,7 @@ struct TriageView: View {
                 .padding(.bottom, 14)
 
                 // Your last line.
-                Text("Вы: \(meta.lastUserText)")
+                Text("You: \(meta.lastUserText)")
                     .font(.system(size: 13)).foregroundStyle(Theme.secondaryText)
                     .lineLimit(2)
                     .padding(.leading, 12)
@@ -160,7 +160,7 @@ struct TriageView: View {
             let t = last.bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
             if !t.isEmpty { return String(t.prefix(600)) }
         }
-        return "Claude ждёт вашего ответа в этой сессии. Откройте её в основном окне, чтобы увидеть полный контекст."
+        return "Claude is waiting for your reply in this session. Open it in the main window to see the full context."
     }
 
     // MARK: - Hints
@@ -170,7 +170,7 @@ struct TriageView: View {
             HStack(spacing: 7) {
                 Image(systemName: "sparkles")
                     .font(.system(size: 12)).foregroundStyle(Theme.accent)
-                Text("ПОДСКАЗКИ")
+                Text("SUGGESTIONS")
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(Theme.tertiaryText)
             }
@@ -190,30 +190,30 @@ struct TriageView: View {
         .padding(.bottom, 14)
     }
 
-    private let staticHints = ["Да, продолжай", "Покажи, что осталось", "Останови и объясни"]
+    private let staticHints = ["Yes, continue", "Show what's left", "Stop and explain"]
 
     // MARK: - Composer (presentational until sending is wired up)
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 12) {
-            TextField("Ваш ответ…", text: $draft, axis: .vertical)
+            TextField("Your reply…", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 14))
                 .lineLimit(1...6)
             HStack(spacing: 10) {
                 Button { model.triageResolve() } label: {
-                    Label("Не требует ответа", systemImage: "checkmark")
+                    Label("No reply needed", systemImage: "checkmark")
                         .font(.system(size: 12.5, weight: .medium))
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 13).frame(height: 32)
                 .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
-                .help("Снять отметку и перейти к следующей (⌥X)")
+                .help("Clear the flag and move to the next one (⌥X)")
 
                 Spacer()
                 Text("⌘↵").font(.system(size: 11)).foregroundStyle(Color(hex: 0xB0B0B5))
                 Button { model.triageAdvance() } label: {
-                    Label("Ответить и дальше", systemImage: "arrow.right")
+                    Label("Reply and continue", systemImage: "arrow.right")
                         .labelStyle(.titleAndIcon)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white)
@@ -221,7 +221,7 @@ struct TriageView: View {
                 .buttonStyle(.plain)
                 .padding(.horizontal, 15).frame(height: 32)
                 .background(Theme.accent, in: RoundedRectangle(cornerRadius: 8))
-                .help("Отправка появится позже; пока — перейти дальше (⌘↵)")
+                .help("Sending comes later; for now — move on (⌘↵)")
             }
         }
         .padding(14)
@@ -234,10 +234,10 @@ struct TriageView: View {
 
     private var shortcutsRow: some View {
         HStack(spacing: 18) {
-            shortcut("⌘↵", "ответить и дальше")
-            shortcut("⌥X", "не требует ответа")
-            shortcut("⌥→", "пропустить")
-            shortcut("1–3", "подсказка")
+            shortcut("⌘↵", "reply and continue")
+            shortcut("⌥X", "no reply needed")
+            shortcut("⌥→", "skip")
+            shortcut("1–3", "suggestion")
         }
         .frame(maxWidth: .infinity)
     }
@@ -253,8 +253,8 @@ struct TriageView: View {
         VStack(spacing: 10) {
             Image(systemName: "checkmark.circle")
                 .font(.system(size: 40)).foregroundStyle(Theme.tertiaryText)
-            Text("Все ответы даны").foregroundStyle(Theme.secondaryText)
-            Button("Выйти") { model.exitTriage() }
+            Text("All replies done").foregroundStyle(Theme.secondaryText)
+            Button("Exit") { model.exitTriage() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

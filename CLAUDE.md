@@ -2,196 +2,200 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Что это
+## What this is
 
-Нативное macOS-приложение (SwiftUI, macOS 26+, Swift 5) для навигации по сессиям
-Claude Code — `~/.claude/projects/*.jsonl`. Порт TUI `session-explorer-2`. Без
-сэндбокса (нужен доступ к `~/.claude` и Apple Events для интеграции с терминалом).
+A native macOS application (SwiftUI, macOS 26+, Swift 5) for navigating Claude Code
+sessions — `~/.claude/projects/*.jsonl`. A port of the `session-explorer-2` TUI.
+Unsandboxed (it needs access to `~/.claude` and Apple Events for terminal integration).
 
-### Референсы по Claude Code
+### Claude Code references
 
-Формат jsonl закрытый и не специфицирован — поведение выясняется по этим
-источникам (читать как референс, не вносить туда правки):
+The jsonl format is closed and unspecified — its behavior is determined from these
+sources (use them as reference; do not make edits there):
 
-- `~/ws/Claude-code` — распакованный исходник официального CLI (`QueryEngine.ts`,
-  `Tool.ts`, `cli/`, …): какие записи и поля Claude Code пишет в jsonl.
-- `~/ws/openclaude` — open-source реализация ([github.com/Gitlawb/openclaude](https://github.com/Gitlawb/openclaude)),
-  второй взгляд на тот же формат и протокол.
+- `~/ws/Claude-code` — the unpacked source of the official CLI (`QueryEngine.ts`,
+  `Tool.ts`, `cli/`, …): which records and fields Claude Code writes to jsonl.
+- `~/ws/openclaude` — an open-source implementation ([github.com/Gitlawb/openclaude](https://github.com/Gitlawb/openclaude)),
+  a second perspective on the same format and protocol.
 
-## Сборка и запуск
+## Build and run
 
-Проект генерируется из `project.yml` через XcodeGen — `.xcodeproj` не редактируется
-вручную. После изменения списка файлов/настроек заново генерируй проект:
+The project is generated from `project.yml` via XcodeGen — the `.xcodeproj` is not
+edited by hand. After changing the file list/settings, regenerate the project:
 
 ```sh
 xcodegen generate
 xcodebuild -project SessionExplorer.xcodeproj -scheme SessionExplorer -configuration Release build
-# либо открыть SessionExplorer.xcodeproj в Xcode и Run (Debug)
+# or open SessionExplorer.xcodeproj in Xcode and Run (Debug)
 ```
 
-Тестов в проекте нет.
+There are no tests in the project.
 
-## Формат сессий (jsonl)
+## Session format (jsonl)
 
-Один файл `<session-id>.jsonl` на сессию, append-only, по записи на строку. Имя
-файла = `sessionId`. Каталог `~/.claude/projects/<encoded-cwd>/` кодирует путь
-проекта, заменяя `/` и `.` на `-` (lossy — реальный `cwd` берётся из самих записей,
-см. `Loader.decodeProjectDirName`). Дискриминатор записи — поле `type`.
+One `<session-id>.jsonl` file per session, append-only, one record per line. The file
+name = `sessionId`. The `~/.claude/projects/<encoded-cwd>/` directory encodes the
+project path, replacing `/` and `.` with `-` (lossy — the real `cwd` is taken from the
+records themselves, see `Loader.decodeProjectDirName`). The record discriminator is the
+`type` field.
 
-**Записи диалога** (`type: "user"` | `"assistant"`) несут общую обёртку:
-`uuid` (стабильный id записи — основа идентичности сообщений), `parentUuid`
-(`uuid` родительской записи в дереве реплик — см. branch ниже), `sessionId`,
-`timestamp`, `cwd`, `gitBranch`, `version`, `userType`, `entrypoint`; опционально
-`forkedFrom`, `isSidechain` (см. «Понятия» ниже).
-Содержимое — в `message` (форма Anthropic Messages API):
+**Dialog records** (`type: "user"` | `"assistant"`) carry a common envelope:
+`uuid` (the stable record id — the basis of message identity), `parentUuid`
+(the `uuid` of the parent record in the reply tree — see branch below), `sessionId`,
+`timestamp`, `cwd`, `gitBranch`, `version`, `userType`, `entrypoint`; optionally
+`forkedFrom`, `isSidechain` (see "Concepts" below).
+The content is in `message` (Anthropic Messages API form):
 
-- `message.content` — либо строка, либо массив блоков с `type`:
+- `message.content` — either a string or an array of blocks with a `type`:
   - assistant: `text` (`{text}`), `thinking` (`{thinking, signature}`),
     `tool_use` (`{id, name, input, caller}`);
   - user: `text` (`{text}`), `image` (`{source}`), `tool_result`
-    (`{tool_use_id, content}` — связывается с `tool_use` по id).
-- assistant-записи также несут `requestId` и `message.model`; tool_result-записи —
-  `toolUseResult`, `promptId`, `sourceToolAssistantUUID`.
+    (`{tool_use_id, content}` — linked to a `tool_use` by id).
+- assistant records also carry `requestId` and `message.model`; tool_result records
+  carry `toolUseResult`, `promptId`, `sourceToolAssistantUUID`.
 
-**Служебные записи** (без `message`, лёгкая обёртка `{sessionId, type, …}`):
-`custom-title` (`{customTitle}` — заданное пользователем имя), `ai-title`
-(`{aiTitle}` — сгенерированное), `last-prompt` (`{lastPrompt, leafUuid}`),
+**Service records** (no `message`, a light envelope `{sessionId, type, …}`):
+`custom-title` (`{customTitle}` — the user-set name), `ai-title`
+(`{aiTitle}` — generated), `last-prompt` (`{lastPrompt, leafUuid}`),
 `permission-mode` (`{permissionMode}`), `mode`, `queue-operation`,
-`attachment` (`{attachment}` — вложения), `file-history-snapshot`
+`attachment` (`{attachment}` — attachments), `file-history-snapshot`
 (`{messageId, snapshot, isSnapshotUpdate}`), `system`, `pr-link`, `slug`.
 
-### Понятия
+### Concepts
 
-- **session-id** — UUID сессии. Всегда совпадает с именем файла (инвариант:
-  во всех записях `sessionId` == basename без `.jsonl`), фигурирует в
-  `claude --resume <id>`. Не путать с порядком в списке: сессии сортируются по
-  `mtime` (время последнего промпта пользователя, `metaSchemaVersion v2`).
-- **session-name** (заголовок) — приоритет `customTitle` (`type:"custom-title"`,
-  задан пользователем) → `aiTitle` (`type:"ai-title"`, авто). Если нет ни того,
-  ни другого — `AutoTitle` детерминированно выводит заголовок из первого промпта.
-  Эти три записи перетираются: берётся ПОСЛЕДНЯЯ в файле (`Loader` так и читает).
-  `titleIsCustom` отличает пользовательский заголовок от авто.
-- **slug** — человекочитаемый идентификатор сессии (`humble-snuggling-beacon`),
-  стабилен в пределах сессии; используется CLI для имён worktree/tmux. Это НЕ
-  заголовок для UI.
-  Три РАЗНЫХ механизма ветвления (легко спутать — назначение разное):
+- **session-id** — the session UUID. Always matches the file name (invariant:
+  in every record `sessionId` == the basename without `.jsonl`), appears in
+  `claude --resume <id>`. Don't confuse it with the order in the list: sessions are
+  sorted by `mtime` (the time of the user's last prompt, `metaSchemaVersion v2`).
+- **session-name** (the title) — priority `customTitle` (`type:"custom-title"`,
+  set by the user) → `aiTitle` (`type:"ai-title"`, auto). If neither is present,
+  `AutoTitle` deterministically derives a title from the first prompt.
+  These three records overwrite one another: the LAST one in the file is used
+  (`Loader` reads them exactly that way). `titleIsCustom` distinguishes a
+  user-set title from an auto one.
+- **slug** — a human-readable session identifier (`humble-snuggling-beacon`),
+  stable within a session; used by the CLI for worktree/tmux names. This is NOT
+  the UI title.
+  Three DIFFERENT branching mechanisms (easy to confuse — their purposes differ):
 
-- **`/branch`** — создаёт ОТДЕЛЬНУЮ сессию-jsonl в `projects/<cwd>/` с полем
-  `forkedFrom: {sessionId, messageUuid}` на первой записи: новый файл ответвлён от
-  записи `messageUuid` исходной сессии `sessionId`. Полноценная самостоятельная
-  сессия (свой `sessionId` = своё имя файла), `--resume`-абельная; UI показывает её
-  как отдельную строку. Одна логическая беседа может быть размазана по цепочке
-  файлов, связанных `forkedFrom`. Очень частый случай, не аномалия.
-- **`/fork`** — НЕ отдельная сессия, а субагент. Пишется в
-  `<session>/subagents/agent-<agentId>.jsonl` (+ `.meta.json` с
-  `{agentType:"fork", isFork:true, description, name}`). Первая запись —
+- **`/branch`** — creates a SEPARATE session jsonl in `projects/<cwd>/` with a
+  `forkedFrom: {sessionId, messageUuid}` field on the first record: the new file is
+  branched off the `messageUuid` record of the source session `sessionId`. A full
+  standalone session (its own `sessionId` = its own file name), `--resume`-able; the
+  UI shows it as a separate row. A single logical conversation can be spread across a
+  chain of files linked by `forkedFrom`. A very common case, not an anomaly.
+- **`/fork`** — NOT a separate session, but a subagent. Written to
+  `<session>/subagents/agent-<agentId>.jsonl` (+ a `.meta.json` with
+  `{agentType:"fork", isFork:true, description, name}`). The first record is
   `fork-context-ref` (`{agentId, parentSessionId, parentLastUuid, contextLength}`):
-  субагент стартует с копией контекста родителя на записи `parentLastUuid`.
-  Реплики идут с `isSidechain: true` и НЕСУТ `sessionId` РОДИТЕЛЯ (не свой); поля
-  `forkedFrom` здесь НЕТ. То есть `/fork` — разновидность sidechain (см. ниже), а не
-  новая сессия в списке.
-- **дерево внутри файла** — внутри одного jsonl записи связаны в дерево через
-  `parentUuid` (`uuid` родителя), и у родителя может быть несколько детей
-  (rewind/редактирование промпта дописывает расходящиеся реплики в тот же файл).
-  «Текущая» линия — путь от корня до активного листа; `last-prompt`
-  (`{lastPrompt, leafUuid}`) указывает этот лист. Линейные сессии — частный случай
-  (у каждого родителя один ребёнок). Сейчас `Loader` читает записи ЛИНЕЙНО в порядке
-  файла и `parentUuid`/`leafUuid` не использует — при таком ветвлении реплики разных
-  веток смешаются; если будешь чинить, реконструируй активную линию от `leafUuid`.
+  the subagent starts with a copy of the parent's context at the `parentLastUuid`
+  record. Its replies have `isSidechain: true` and CARRY the PARENT's `sessionId`
+  (not their own); there is NO `forkedFrom` field here. So `/fork` is a kind of
+  sidechain (see below), not a new session in the list.
+- **in-file tree** — within a single jsonl, records are linked into a tree via
+  `parentUuid` (the parent's `uuid`), and a parent can have multiple children
+  (rewinding/editing a prompt appends diverging replies to the same file).
+  The "current" line is the path from the root to the active leaf; `last-prompt`
+  (`{lastPrompt, leafUuid}`) points to that leaf. Linear sessions are a special case
+  (each parent has a single child). Currently `Loader` reads records LINEARLY in file
+  order and does not use `parentUuid`/`leafUuid` — under such branching, replies from
+  different branches will be mixed; if you fix this, reconstruct the active line from
+  `leafUuid`.
 
-  Ни одно из этого не путать с `gitBranch` — это git-ветка `cwd` на момент записи,
-  отдельное поле, к ветвлению сессий/диалога отношения не имеет.
-- **sidechain** (`isSidechain: true`) — записи побочной ветки (диалог субагента:
-  `AgentTool` или `/fork`), а не основной транскрипт. Несут `sessionId` родителя.
-  Официальный CLI исключает их из основного представления и статистики
-  (`!isSidechain`); делай так же.
-- **system-reminder** — блок `<system-reminder>…</system-reminder>` ВНУТРИ текста
-  сообщения (служебные инструкции, инжектированные харнессом — caveats, напоминания
-  о malware и т.п.), а не отдельный `type`. `Content.swift` отсеивает такой шум из
-  отображаемого текста; при добавлении парсинга учитывай, что это не пользователь.
+  None of this should be confused with `gitBranch` — that is the git branch of `cwd`
+  at the time of the record, a separate field with no relation to session/dialog
+  branching.
+- **sidechain** (`isSidechain: true`) — records of a side branch (a subagent dialog:
+  `AgentTool` or `/fork`), not the main transcript. They carry the parent's `sessionId`.
+  The official CLI excludes them from the main view and statistics
+  (`!isSidechain`); do the same.
+- **system-reminder** — a `<system-reminder>…</system-reminder>` block INSIDE the
+  message text (service instructions injected by the harness — caveats, malware
+  reminders, etc.), not a separate `type`. `Content.swift` filters such noise out of
+  the displayed text; when adding parsing, keep in mind this is not the user.
 
-Парсинг устойчив к незнакомым `type`/полям (Claude Code добавляет их со временем):
-`Content.swift` извлекает текст и отсеивает служебный шум, неизвестные записи
-игнорируются. Истину о формате выясняй по референсам выше и по реальным файлам в
-`~/.claude/projects`, не по догадкам.
+Parsing is resilient to unfamiliar `type`s/fields (Claude Code adds them over time):
+`Content.swift` extracts text and filters out service noise, unknown records are
+ignored. Establish the truth about the format from the references above and from real
+files in `~/.claude/projects`, not from guesses.
 
-## Архитектура
+## Architecture
 
-Поток данных: jsonl на диске → `Loader` (парсинг) → `Store` (SwiftData-кеш) →
-`AppModel` (состояние) → `Views`.
+Data flow: jsonl on disk → `Loader` (parsing) → `Store` (SwiftData cache) →
+`AppModel` (state) → `Views`.
 
-### Слой данных (`Sources/Core/`)
+### Data layer (`Sources/Core/`)
 
-- **`Loader.swift`** — сканирует `~/.claude/projects`, парсит jsonl. Каждая строка
-  парсится ровно один раз за жизнь кеша: неизменённые файлы пропускаются по mtime,
-  изменённые читаются только с сохранённого `parsedOffset` (jsonl append-only).
-  `parseSessionMeta` читает файл один раз и держит только лёгкие поля (без
-  транскрипта). Полный диалог грузится лениво и кешируется в памяти (LRU);
-  `loadDialogTail` дочитывает только хвост открытой сессии.
-- **`Store.swift`** — персистентный кеш на SwiftData (SQLite) в
-  `Application Support/SessionExplorer/cache.store`. Хранит **только метаданные**
-  (`SessionRecord`). При несовместимости схемы стор удаляется и пересоздаётся.
-  `AppModel.metaSchemaVersion` форсирует пересчёт устаревших строк.
-- **`Content.swift`** — извлечение текста из форм `message.content`, отсев шума
-  (`<command-*>`, caveats, reminders).
-- **`Search.swift`** — двухуровневый отменяемый поиск: cheap (мгновенный, по
-  заголовкам/последним репликам, на main actor) + deep (инкрементальный по всему
-  диалогу, off-thread, дебаунс 250мс, чанки по 40). AND по словам, regex через
-  `/pattern/`.
-- **`AutoTitle.swift`** — ленивый детерминированный заголовок из первого запроса
-  (без сети/LLM), если нет `custom-title`/`ai-title`.
-- **`OpenSession.swift`** — открыть сессию в терминале (`claude --resume <id>` через
-  clipboard + AppleScript с физическими key codes, работает в русской раскладке).
-- **`FolderWatcher.swift`** — FSEvents-наблюдение каталога; список и открытый диалог
-  обновляются realtime.
+- **`Loader.swift`** — scans `~/.claude/projects`, parses jsonl. Each line is parsed
+  exactly once for the lifetime of the cache: unchanged files are skipped by mtime,
+  changed ones are read only from the saved `parsedOffset` (jsonl is append-only).
+  `parseSessionMeta` reads the file once and keeps only the light fields (no
+  transcript). The full dialog is loaded lazily and cached in memory (LRU);
+  `loadDialogTail` reads only the tail of the open session.
+- **`Store.swift`** — a persistent cache on SwiftData (SQLite) in
+  `Application Support/SessionExplorer/cache.store`. Stores **metadata only**
+  (`SessionRecord`). On schema incompatibility the store is deleted and recreated.
+  `AppModel.metaSchemaVersion` forces recomputation of stale rows.
+- **`Content.swift`** — extracting text from the `message.content` forms, filtering
+  out noise (`<command-*>`, caveats, reminders).
+- **`Search.swift`** — a two-level cancellable search: cheap (instant, over
+  titles/last replies, on the main actor) + deep (incremental over the whole dialog,
+  off-thread, 250ms debounce, chunks of 40). AND across words, regex via `/pattern/`.
+- **`AutoTitle.swift`** — a lazy deterministic title from the first request
+  (no network/LLM), when there is no `custom-title`/`ai-title`.
+- **`OpenSession.swift`** — open a session in the terminal (Ghostty / Terminal.app /
+  iTerm2) via AppleScript: `claude --resume <id>` in the project directory. For Ghostty
+  it focuses an already-open tab for the session (matched by title) or creates a new one.
+- **`FolderWatcher.swift`** — FSEvents directory watching; the list and the open dialog
+  update in realtime.
 
-### Модель (`Sources/Models/Models.swift`)
+### Model (`Sources/Models/Models.swift`)
 
-Доменные типы и иерархия рендера диалога:
-`DialogMessage` (сырое сообщение) → `DialogTurn` (смежные сообщения одной стороны
-сливаются; tool-пинг-понг свёрнут) → `DialogBlock` (пользовательский промпт + его
-ответы Claude). **Block — единица скролла, навигации и outline.** `ContentPiece`
-(проза/тул в исходном порядке — тулы рендерятся на месте). У сообщений стабильные
-id из jsonl `uuid`, чтобы при дочитывании хвоста не терялась идентичность и
-SwiftUI ре-рендерил только новое.
+Domain types and the dialog render hierarchy:
+`DialogMessage` (a raw message) → `DialogTurn` (adjacent messages from the same side
+are merged; the tool ping-pong is collapsed) → `DialogBlock` (a user prompt plus
+Claude's responses to it). **A block is the unit of scrolling, navigation, and the
+outline.** `ContentPiece` (prose/tool in original order — tools are rendered in place).
+Messages have stable ids from the jsonl `uuid`, so that when reading the tail their
+identity is not lost and SwiftUI re-renders only what is new.
 
-### Состояние (`Sources/AppModel.swift`)
+### State (`Sources/AppModel.swift`)
 
-`@MainActor ObservableObject` — единый источник истины. Ключевые инварианты:
+`@MainActor ObservableObject` — the single source of truth. Key invariants:
 
-- **Два независимых фильтра**: `scope` (single-select: all/favorites/today/
-  last24h/last2d/week) и `selectedProjectPaths` (multi-select проектов), применяются
-  вместе.
-- **Коалесинг обновлений списка**: фоновые записи (включая саму активную сессию) НЕ
-  должны дёргать список при скролле — обновления списка дебаунсятся (~1.2с),
-  применяются на idle и только если изменился `signature()` видимого состояния;
-  ждут окончания скролла (`listIsScrolling`). Открытый диалог обновляется сразу и
-  отдельно (append-only через `refreshOpenDialog`).
-- **Triage-режим** ("Ответь всем поочерёдно") — отдельный полноэкранный режим
-  (`triageMode`, не фильтр сайдбара), идёт по `attentionSessions` (нужен ответ + не
-  скрыта + проходит фильтр проектов).
-- **UI-стейт персистится** в UserDefaults (`persistUIState`/`restoreUIState`); ширины
-  колонок коммитятся только на конце драга (`commitWidths`) — синхронная запись на
-  каждый дельта-кадр давала джиттер.
+- **Two independent filters**: `scope` (single-select: all/favorites/today/
+  last24h/last2d/week) and `selectedProjectPaths` (multi-select of projects), applied
+  together.
+- **Coalescing of list updates**: background writes (including the active session
+  itself) must NOT jostle the list while scrolling — list updates are debounced
+  (~1.2s), applied on idle and only if the visible state's `signature()` changed;
+  they wait for scrolling to finish (`listIsScrolling`). The open dialog updates
+  immediately and separately (append-only via `refreshOpenDialog`).
+- **Triage mode** ("Reply to everyone in turn") — a separate full-screen mode
+  (`triageMode`, not a sidebar filter), going through `attentionSessions` (needs a
+  reply + not hidden + passes the project filter).
+- **UI state is persisted** in UserDefaults (`persistUIState`/`restoreUIState`); column
+  widths are committed only at the end of a drag (`commitWidths`) — a synchronous write
+  on every delta frame caused jitter.
 
-### Вью (`Sources/Views/`)
+### Views (`Sources/Views/`)
 
-`RootView` (три-четыре колонки), `SidebarView`, `SessionListView`, `DetailView`,
-`MessageView` (реплики + компактные тулы), `OutlineView` (оглавление промптов),
+`RootView` (three-to-four columns), `SidebarView`, `SessionListView`, `DetailView`,
+`MessageView` (replies + compact tools), `OutlineView` (a prompt outline),
 `TriageView`, `InspectorView`, `Toolbar`, `HotkeyHelpView`. `Commands.swift` —
-меню/хоткеи (`AppCommands`). `Theme.swift`, `Markdown.swift`, `Format.swift`,
-`FlowLayout.swift`, `Scaling.swift` — оформление и утилиты.
+menus/hotkeys (`AppCommands`). `Theme.swift`, `Markdown.swift`, `Format.swift`,
+`FlowLayout.swift`, `Scaling.swift` — styling and utilities.
 
-## Конвенции
+## Conventions
 
-- **Не упрощать.** Не выкидывай инварианты, обработку краёв, дебаунсы/коалесинг,
-  off-thread-логику и проверки идентичности под видом «упрощения» — каждый такой
-  кусок здесь стоит за конкретной болью (джиттер списка, гонки при переключении
-  сессии, ветвление/дочитывание хвоста jsonl). Меняй ровно то, что просили; если
-  кажется, что код избыточен — сначала спроси.
-- Терминология рендера: turn / block / piece (см. Models). Используй эти термины,
-  не выдумывай свои.
-- Любая операция I/O по сессиям (парсинг, deep-поиск, загрузка диалога/картинок)
-  идёт off-thread через `Task.detached`; результат применяется на `MainActor` с
-  проверкой, что `selectedID` всё ещё тот же.
-- Транскрипт никогда не персистится в БД — только лениво из jsonl.
+- **Don't simplify.** Don't throw out invariants, edge-case handling,
+  debounces/coalescing, off-thread logic, or identity checks under the guise of
+  "simplification" — each such piece here stands for a concrete pain (list jitter,
+  races when switching sessions, branching/reading the jsonl tail). Change exactly
+  what was asked; if the code seems redundant — ask first.
+- Render terminology: turn / block / piece (see Models). Use these terms, don't invent
+  your own.
+- Any session I/O operation (parsing, deep search, loading the dialog/images) runs
+  off-thread via `Task.detached`; the result is applied on the `MainActor` with a check
+  that `selectedID` is still the same.
+- The transcript is never persisted to the DB — only lazily from jsonl.

@@ -7,10 +7,10 @@ struct SettingsView: View {
 
     var body: some View {
         TabView {
-            TerminalSettings().tabItem { Label("Терминал", systemImage: "terminal") }
-            AppearanceSettings().tabItem { Label("Внешний вид", systemImage: "textformat.size") }
-            DialogSettings().tabItem { Label("Диалог", systemImage: "bubble.left.and.bubble.right") }
-            DataSettings().tabItem { Label("Данные", systemImage: "externaldrive") }
+            TerminalSettings().tabItem { Label("Terminal", systemImage: "terminal") }
+            AppearanceSettings().tabItem { Label("Appearance", systemImage: "textformat.size") }
+            DialogSettings().tabItem { Label("Dialog", systemImage: "bubble.left.and.bubble.right") }
+            DataSettings().tabItem { Label("Data", systemImage: "externaldrive") }
         }
         .frame(width: 520)
     }
@@ -21,7 +21,7 @@ private struct TerminalSettings: View {
 
     var body: some View {
         Form {
-            Picker("Открывать сессии в", selection: $model.terminalApp) {
+            Picker("Open sessions in", selection: $model.terminalApp) {
                 ForEach(TerminalApp.allCases) { app in
                     Text(app.label).tag(app)
                 }
@@ -36,18 +36,18 @@ private struct AppearanceSettings: View {
 
     var body: some View {
         Form {
-            FontField(title: "Основной текст", systemLabel: "Системный",
+            FontField(title: "Body text", systemLabel: "System",
                       selection: $model.proseFont)
-            FontField(title: "Код и тулы", systemLabel: "Системный моноширинный",
+            FontField(title: "Code and tools", systemLabel: "System monospaced",
                       selection: $model.monoFont)
 
             Slider(value: $model.fontScale, in: 0.7...2.0, step: 0.05) {
-                Text("Масштаб текста")
+                Text("Text scale")
             } minimumValueLabel: { Text("70%").font(.caption) }
               maximumValueLabel: { Text("200%").font(.caption) }
 
             Slider(value: $model.air, in: 8...40, step: 1) {
-                Text("Воздух между репликами")
+                Text("Spacing between messages")
             } minimumValueLabel: { Text("8").font(.caption) }
               maximumValueLabel: { Text("40").font(.caption) }
         }
@@ -60,9 +60,9 @@ private struct DialogSettings: View {
 
     var body: some View {
         Form {
-            Toggle("Краткий режим", isOn: $model.briefMode)
-            Toggle("Группировать ветки сессий", isOn: $model.groupForks)
-            Picker("Ветки в диалоге", selection: $model.branchMode) {
+            Toggle("Brief mode", isOn: $model.briefMode)
+            Toggle("Group session branches", isOn: $model.groupForks)
+            Picker("Branches in dialog", selection: $model.branchMode) {
                 ForEach(BranchMode.allCases) { mode in
                     Text(mode.label).tag(mode)
                 }
@@ -78,23 +78,23 @@ private struct DataSettings: View {
 
     var body: some View {
         Form {
-            LabeledContent("Каталог сессий") {
+            LabeledContent("Sessions directory") {
                 Text(model.projectsDirPath).foregroundStyle(.secondary).textSelection(.enabled)
             }
-            LabeledContent("Файл кеша") {
+            LabeledContent("Cache file") {
                 Text(model.cacheStorePath).foregroundStyle(.secondary).textSelection(.enabled)
             }
-            LabeledContent("Кеш метаданных") {
-                Button("Сбросить…") { confirmReset = true }
+            LabeledContent("Metadata cache") {
+                Button("Reset…") { confirmReset = true }
             }
         }
         .padding(20)
-        .confirmationDialog("Сбросить кеш метаданных?",
+        .confirmationDialog("Reset metadata cache?",
                             isPresented: $confirmReset, titleVisibility: .visible) {
-            Button("Сбросить", role: .destructive) { model.resetCache() }
-            Button("Отмена", role: .cancel) {}
+            Button("Reset", role: .destructive) { model.resetCache() }
+            Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Все сессии будут перечитаны из jsonl. Может занять время на больших коллекциях.")
+            Text("All sessions will be re-read from jsonl. This may take a while for large collections.")
         }
     }
 }
@@ -136,7 +136,7 @@ private struct FontField: View {
 
     private var picker: some View {
         VStack(spacing: 0) {
-            TextField("Поиск шрифта", text: $query)
+            TextField("Search fonts", text: $query)
                 .textFieldStyle(.roundedBorder)
                 .padding(8)
             Divider()
