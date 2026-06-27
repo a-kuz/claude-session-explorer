@@ -7,11 +7,13 @@ struct DetailView: View {
     /// `.scrollPosition` API (no per-block GeometryReader, which caused the
     /// preference storm that made scroll + panel resize stutter).
     @State private var topBlockID: String?
-    /// Bumped per programmatic jump so a superseded jump's delayed guard-clear
-    /// (see scrollNonce handler) knows it's stale and does nothing.
-    @State private var jumpToken = 0
     @FocusState private var transcriptFocused: Bool
     @Environment(\.s) private var s
+
+    /// Jumps within this many blocks of the current top animate (a smooth glide);
+    /// farther jumps land instantly and exactly (a page-flip), avoiding the
+    /// stuttering "two-stage" animated scroll across many rows.
+    private let nearJumpBlocks = 10
 
     var body: some View {
         if let meta = model.selectedMeta {
@@ -24,7 +26,7 @@ struct DetailView: View {
                 Text("Select a session").foregroundStyle(Theme.secondaryText)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.white)
+            .background(Theme.cardBg)
         }
     }
 
@@ -32,68 +34,67 @@ struct DetailView: View {
     // MARK: - Conversation
 
     private func conversation(_ meta: SessionMeta) -> some View {
-        // ScrollViewReader drives jumps via `proxy.scrollTo(id)`, which forces
-        // SwiftUI to materialise and land exactly on the target block — unlike
-        // `.scrollPosition(id:)` writes, which on a lazy variable-height list
-        // estimate the offset and undershoot ever more the farther the jump.
-        // `.scrollPosition` stays only as a READER of the top block (for the
-        // outline highlight), where its estimation error doesn't matter.
+        // A `List` (NSTableView-backed on macOS) — NOT ScrollView+LazyVStack —
+        // because only `List` keeps a precise row geometry that lets `scrollTo`
+        // land exactly on a far, not-yet-rendered block. With LazyVStack the list
+        // has no real height for unmeasured rows, so a far `scrollTo` lands on an
+        // estimate and overshoots/bounces (Apple-confirmed: developer.apple.com
+        // forums/thread/685461; fatbobman "List or LazyVStack"). Each block is its
+        // OWN row (the scroll anchor); `.scrollPosition` reads the top row for the
+        // outline highlight.
         ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    SessionHeader(meta: meta)
-                        .frame(maxWidth: model.sidebarCollapsed ? 820 : .infinity, alignment: .leading)
-                        .frame(maxWidth: .infinity)
-                    if model.dialog != nil {
-                        ConversationList(
-                            blocks: model.blocks,
-                            tokens: model.searchTokens,
-                            focusedID: model.scrollTarget,
-                            air: model.air,
-                            showBranchBars: model.branchMode != .activeOnly,
-                            sidebarCollapsed: model.sidebarCollapsed,
-                            dialogImages: model.dialogImages,
-                            fontTick: model.fontTick
-                        )
-                        .equatable()
-                        .scrollTargetLayout()
-                        .padding(.horizontal, model.sidebarCollapsed ? 40 : 30)
-                        .padding(.vertical, s(22))
-                        .frame(maxWidth: model.sidebarCollapsed ? 820 : .infinity, alignment: .leading)
-                        .frame(maxWidth: .infinity)
-                        .textSelection(.enabled)
-                    } else {
-                        ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
-                    }
+            List {
+                SessionHeader(meta: meta)
+                    .frame(maxWidth: model.sidebarCollapsed ? 820 : .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+                    .conversationRow()
+
+                if model.dialog != nil {
+                    ConversationRows(
+                        blocks: model.blocks,
+                        tokens: model.searchTokens,
+                        focusedID: model.scrollTarget,
+                        air: model.air,
+                        showBranchBars: model.branchMode != .activeOnly,
+                        sidebarCollapsed: model.sidebarCollapsed,
+                        dialogImages: model.dialogImages,
+                        fontTick: model.fontTick
+                    )
+                } else {
+                    ProgressView()
+                        .frame(maxWidth: .infinity).padding(.top, 40)
+                        .conversationRow()
                 }
             }
+            .listStyle(.plain)
+            .environment(\.defaultMinListRowHeight, 0)
+            .scrollContentBackground(.hidden)
+            .background(Theme.cardBg)
             .scrollEdgeEffectStyle(.soft, for: .top)
             .scrollPosition(id: $topBlockID, anchor: .top)
+            .textSelection(.enabled)
             .onChange(of: model.scrollNonce) { _, _ in
                 guard let t = model.scrollTarget else { return }
-                jumpToken &+= 1
-                let token = jumpToken
-                func land() {
-                    // scrollTo on a lazy list can undershoot when the target is
-                    // far off-screen and not yet measured. Re-issue once on the
-                    // next runloop so the now-materialised neighbours let it land
-                    // exactly. Guard by token so a newer jump cancels this.
-                    DispatchQueue.main.async {
-                        guard token == jumpToken else { return }
-                        proxy.scrollTo(t, anchor: .top)
-                        model.jumpInFlight = false
-                    }
-                }
-                if model.scrollInstant {
-                    proxy.scrollTo(t, anchor: .top)
-                    land()
+                // Near vs. far on block-index distance: a near jump animates (a
+                // genuine glide of a handful of rows); a far one jumps instantly
+                // and exactly — animating across hundreds of rows is what makes
+                // List materialise everything in between and stutter "in two
+                // stages". Far instant = a clean page-flip, no in-between churn.
+                let from = model.blockIndex(of: topBlockID)
+                let to = model.blockIndex(of: t)
+                let distance = (from != nil && to != nil) ? abs(to! - from!) : Int.max
+                let near = !model.scrollInstant && distance <= nearJumpBlocks
+
+                if near {
+                    withAnimation(.easeInOut(duration: 0.45)) { proxy.scrollTo(t, anchor: .top) }
                 } else {
-                    withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo(t, anchor: .top) }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
-                        guard token == jumpToken else { return }
-                        proxy.scrollTo(t, anchor: .top)
-                        model.jumpInFlight = false
-                    }
+                    proxy.scrollTo(t, anchor: .top)
+                }
+                // List lands precisely, so there is no convergence loop to settle;
+                // release the guard on the next runloop once the position applied.
+                DispatchQueue.main.async {
+                    model.jumpInFlight = false
+                    model.scrollInstant = false
                 }
             }
         }
@@ -143,12 +144,16 @@ private struct SessionHeader: View {
     }
 }
 
-/// The conversation's block list, isolated as an `Equatable` view so SwiftUI can
-/// prune it from re-render when its inputs are unchanged — keeping per-frame
-/// scroll updates in the parent from rebuilding the whole LazyVStack on huge
-/// sessions. Inputs are plain values (no `@EnvironmentObject`) precisely so the
-/// equality check is the only thing that decides a rebuild.
-private struct ConversationList: View, Equatable {
+/// The conversation's blocks, emitted as individual `List` rows. Each block is its
+/// OWN row carrying `.id(block.id)` — the scroll anchor `scrollTo` lands on, and the
+/// id `.scrollPosition` reports as the top row. Being real List rows (NSTableView
+/// rows on macOS) is exactly what makes `scrollTo` land precisely on far blocks: the
+/// list knows real row geometry rather than estimating unmeasured heights.
+///
+/// `@ViewBuilder` returning rows (not a wrapper View) so List sees each block as a
+/// distinct row. Per-block re-render is naturally pruned: List only builds visible
+/// rows, and `BlockView` diffs cheaply on its value inputs.
+private struct ConversationRows: View {
     let blocks: [DialogBlock]
     let tokens: [String]
     let focusedID: String?
@@ -162,16 +167,6 @@ private struct ConversationList: View, Equatable {
 
     @Environment(\.s) private var s
 
-    static func == (l: ConversationList, r: ConversationList) -> Bool {
-        // `dialogImages` compared by count: slices are positional, so a count
-        // change is the only way a turn's images change identity here.
-        l.blocks == r.blocks && l.tokens == r.tokens && l.focusedID == r.focusedID
-            && l.air == r.air && l.showBranchBars == r.showBranchBars
-            && l.sidebarCollapsed == r.sidebarCollapsed
-            && l.dialogImages.count == r.dialogImages.count
-            && l.fontTick == r.fontTick
-    }
-
     /// Map a block's turns to their slices of the session-wide image array.
     private func imagesForBlock(_ block: DialogBlock) -> [String: [NSImage]] {
         var out: [String: [NSImage]] = [:]
@@ -184,35 +179,47 @@ private struct ConversationList: View, Equatable {
     }
 
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: 0) {
-            let lastIdx = blocks.count - 1
-            ForEach(blocks.indices, id: \.self) { idx in
-                let block = blocks[idx]
-                // One scroll target per block: the branch bar, the block, and the
-                // trailing separator are wrapped in a SINGLE id'd container. With
-                // the separator as its own un-id'd sibling, `.scrollPosition` put
-                // the anchor on the wrong element and every jump undershot by one
-                // block — keep the LazyVStack's direct children = blocks only.
-                VStack(alignment: .leading, spacing: 0) {
-                    if showBranchBars {
-                        BranchBar(firstMessageID: block.id)
-                    }
-                    BlockView(block: block,
-                              tokens: tokens,
-                              focusedID: focusedID,
-                              air: air,
-                              images: imagesForBlock(block),
-                              nextPrompt: idx < lastIdx ? blocks[idx + 1].promptTurn?.bodyText : nil)
-                    if idx < lastIdx {
-                        Rectangle()
-                            .fill(Color.primary.opacity(0.08))
-                            .frame(height: 0.5)
-                            .padding(.horizontal, sidebarCollapsed ? -40 : -30)
-                            .padding(.vertical, s(air))
-                    }
+        let lastIdx = blocks.count - 1
+        ForEach(blocks.indices, id: \.self) { idx in
+            let block = blocks[idx]
+            VStack(alignment: .leading, spacing: 0) {
+                if showBranchBars {
+                    BranchBar(firstMessageID: block.id)
                 }
-                .id(block.id)
+                BlockView(block: block,
+                          tokens: tokens,
+                          focusedID: focusedID,
+                          air: air,
+                          images: imagesForBlock(block),
+                          nextPrompt: idx < lastIdx ? blocks[idx + 1].promptTurn?.bodyText : nil)
+                if idx < lastIdx {
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.08))
+                        .frame(height: 0.5)
+                        .padding(.horizontal, sidebarCollapsed ? -40 : -30)
+                        .padding(.top, s(air))
+                }
             }
+            .padding(.horizontal, sidebarCollapsed ? 40 : 30)
+            .padding(.top, idx == 0 ? s(22) : s(air))
+            .padding(.bottom, idx == lastIdx ? s(22) : 0)
+            .frame(maxWidth: sidebarCollapsed ? 820 : .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .id(block.id)
+            .conversationRow()
         }
+    }
+}
+
+/// Strips the stock `List` row chrome (separators, insets, selection/hover tint,
+/// background) so a row renders as plain conversation content — the look the old
+/// ScrollView had — while keeping List's precise row geometry for `scrollTo`.
+private extension View {
+    func conversationRow() -> some View {
+        self
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+            .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
     }
 }

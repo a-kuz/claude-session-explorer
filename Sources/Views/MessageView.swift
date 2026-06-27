@@ -77,13 +77,13 @@ struct TurnView: View {
         HStack(alignment: .firstTextBaseline, spacing: s(10)) {
             Text(turn.bodyText)
                 .font(.system(size: 15 * scale, weight: .semibold))
-                .foregroundStyle(Color(hex: 0x1D1D1F))
+                .foregroundStyle(Color.primary)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
             if let ts = turn.timestamp {
                 Spacer(minLength: 4)
                 Text(Format.timeOrDate(ts))
-                    .font(.system(size: 11 * scale)).foregroundStyle(Color(hex: 0xA1A1A6))
+                    .font(.system(size: 11 * scale)).foregroundStyle(Theme.tertiaryText)
                     .layoutPriority(1)
             }
         }
@@ -91,7 +91,7 @@ struct TurnView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .leading) {
             Rectangle()
-                .fill(isFocused ? Theme.accent : Color(hex: 0xDFE3E9))
+                .fill(isFocused ? Theme.accent : Theme.rule)
                 .frame(width: s(2.5))
         }
     }
@@ -232,7 +232,7 @@ struct MarkdownBlockView: View {
         case .heading(let level, let text):
             inlineText(text, size: (level <= 1 ? 16 : 13.5) * scale,
                        weight: level <= 1 ? .bold : .semibold,
-                       color: level <= 1 ? .primary : Color(hex: 0x3A3A3C))
+                       color: level <= 1 ? .primary : .secondary)
                 .padding(.top, s(6))
         case .paragraph(let text):
             inlineText(text, size: bodySize, weight: .regular, color: .primary)
@@ -277,7 +277,7 @@ struct MarkdownBlockView: View {
                             color: Color) -> Text {
         var out = Markdown.attributed(
             text, size: size, weight: weight, color: color,
-            codeColor: Color(hex: 0x3A3A3C), codeBg: Theme.codeBg, linkColor: Theme.accent)
+            codeColor: .secondary, codeBg: Theme.codeBg, linkColor: Theme.accent)
         if !tokens.isEmpty { applyHighlight(&out) }
         return Text(out)
     }
@@ -338,8 +338,8 @@ struct TableBlock: View {
         }
         // Render markdown inside body cells (bold/italic/`code`/links).
         return Text(Markdown.attributed(
-            value, size: 12 * scale, weight: .regular, color: Color(hex: 0x3A3A3C),
-            codeColor: Color(hex: 0x3A3A3C), codeBg: Theme.codeBg, linkColor: Theme.accent))
+            value, size: 12 * scale, weight: .regular, color: .secondary,
+            codeColor: .secondary, codeBg: Theme.codeBg, linkColor: Theme.accent))
     }
 
     private func gridRow(_ cells: [String], isHeader: Bool) -> some View {
@@ -480,10 +480,10 @@ struct CodeBlock: View {
                     .foregroundStyle(Theme.secondaryText)
                 Spacer()
                 Image(systemName: "doc.on.doc").font(.system(size: 11 * scale))
-                    .foregroundStyle(Color(hex: 0xB0B0B5))
+                    .foregroundStyle(Theme.tertiaryText)
             }
             .padding(.horizontal, s(12)).padding(.vertical, s(7))
-            .background(Color(hex: 0xF6F6F8))
+            .background(Theme.codeBg)
             Divider()
             Text(lines.joined(separator: "\n"))
                 .font(DialogFonts.mono(size: 12.5 * scale))
@@ -492,7 +492,7 @@ struct CodeBlock: View {
                 .padding(.horizontal, s(14)).padding(.vertical, s(12))
                 .textSelection(.enabled)
         }
-        .background(Color.white)
+        .background(Theme.cardBg)
         .overlay(RoundedRectangle(cornerRadius: s(10)).strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
         .clipShape(RoundedRectangle(cornerRadius: s(10)))
     }
@@ -587,7 +587,7 @@ struct ToolChip: View {
                     .font(DialogFonts.mono(size: 11.5 * scale, weight: .medium))
                     .lineLimit(1).truncationMode(.middle)
             }
-            .foregroundStyle(Color(hex: 0x60646C))
+            .foregroundStyle(Color.secondary)
             .padding(.horizontal, s(9)).padding(.vertical, s(4))
             .background(Color.primary.opacity(0.05), in: Capsule())
             .contentShape(Capsule())

@@ -45,7 +45,35 @@ enum MarkdownBlock: Identifiable {
 }
 
 enum Markdown {
+    // Parsing the same prose text repeatedly is pure waste: rebuildTurns runs
+    // DialogTurn.build on the WHOLE transcript on every tail append and every
+    // brief/branch toggle, and almost all prose blocks are byte-for-byte identical
+    // across rebuilds. Memoize parse() so an unchanged block is reparsed at most
+    // once. Bounded so a giant session can't grow the cache without limit.
+    private static var cache: [String: [MarkdownBlock]] = [:]
+    private static var cacheOrder: [String] = []
+    private static let cacheLimit = 4000
+    private static let cacheLock = NSLock()
+
     static func parse(_ src: String) -> [MarkdownBlock] {
+        cacheLock.lock()
+        if let hit = cache[src] { cacheLock.unlock(); return hit }
+        cacheLock.unlock()
+        let result = parseUncached(src)
+        cacheLock.lock()
+        if cache[src] == nil {
+            cache[src] = result
+            cacheOrder.append(src)
+            if cacheOrder.count > cacheLimit {
+                let evict = cacheOrder.removeFirst()
+                cache[evict] = nil
+            }
+        }
+        cacheLock.unlock()
+        return result
+    }
+
+    private static func parseUncached(_ src: String) -> [MarkdownBlock] {
         var blocks: [MarkdownBlock] = []
         let lines = src.components(separatedBy: "\n")
         var i = 0

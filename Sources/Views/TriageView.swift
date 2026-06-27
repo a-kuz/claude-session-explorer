@@ -23,7 +23,7 @@ struct TriageView: View {
                 emptyState
             }
         }
-        .background(Color(hex: 0xF5F6F9))
+        .background(Theme.panelBg)
     }
 
     // MARK: - Header
@@ -65,7 +65,7 @@ struct TriageView: View {
             .padding(.horizontal, 24)
         }
         .frame(height: 46)
-        .background(Color.white.opacity(0.5))
+        .background(Color.primary.opacity(0.03))
     }
 
     @ViewBuilder
@@ -76,7 +76,7 @@ struct TriageView: View {
             .font(.system(size: 11.5, weight: isCurrent ? .semibold : .regular))
             .lineLimit(1).frame(maxWidth: 180)
             .strikethrough(isDone)
-            .foregroundStyle(isCurrent ? .white : (isDone ? Theme.secondaryText : Color(hex: 0x3A3A3C)))
+            .foregroundStyle(isCurrent ? .white : (isDone ? Theme.secondaryText : Color.primary))
             .padding(.horizontal, 10).padding(.vertical, 3)
             .background {
                 if isCurrent {
@@ -84,7 +84,7 @@ struct TriageView: View {
                 } else if isDone {
                     Capsule().fill(Color.primary.opacity(0.05))
                 } else {
-                    Capsule().fill(Color.white)
+                    Capsule().fill(Theme.cardBg)
                         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
                 }
             }
@@ -115,7 +115,7 @@ struct TriageView: View {
                     .lineLimit(2)
                     .padding(.leading, 12)
                     .overlay(alignment: .leading) {
-                        Rectangle().fill(Color(hex: 0xD8D8DC)).frame(width: 2)
+                        Rectangle().fill(Theme.rule).frame(width: 2)
                     }
                     .padding(.bottom, 14)
 
@@ -146,7 +146,7 @@ struct TriageView: View {
         }
         .padding(.horizontal, 20).padding(.vertical, 18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
+        .background(Theme.cardBg, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.05), radius: 3, y: 1)
         .padding(.bottom, 18)
@@ -179,7 +179,7 @@ struct TriageView: View {
                     Text(hint)
                         .font(.system(size: 13))
                         .padding(.horizontal, 12).padding(.vertical, 7)
-                        .background(Color.white, in: RoundedRectangle(cornerRadius: 9))
+                        .background(Theme.cardBg, in: RoundedRectangle(cornerRadius: 9))
                         .overlay(RoundedRectangle(cornerRadius: 9)
                             .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
                         .contentShape(RoundedRectangle(cornerRadius: 9))
@@ -211,7 +211,7 @@ struct TriageView: View {
                 .help("Clear the flag and move to the next one (⌥X)")
 
                 Spacer()
-                Text("⌘↵").font(.system(size: 11)).foregroundStyle(Color(hex: 0xB0B0B5))
+                Text("⌘↵").font(.system(size: 11)).foregroundStyle(Theme.tertiaryText)
                 Button { model.triageAdvance() } label: {
                     Label("Reply and continue", systemImage: "arrow.right")
                         .labelStyle(.titleAndIcon)
@@ -225,7 +225,7 @@ struct TriageView: View {
             }
         }
         .padding(14)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
+        .background(Theme.cardBg, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.accent, lineWidth: 2))
         .padding(.bottom, 14)
     }
@@ -244,7 +244,7 @@ struct TriageView: View {
 
     private func shortcut(_ key: String, _ label: String) -> some View {
         HStack(spacing: 5) {
-            Text(key).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Color(hex: 0x6B7280))
+            Text(key).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Color.secondary)
             Text(label).font(.system(size: 11.5)).foregroundStyle(Theme.tertiaryText)
         }
     }

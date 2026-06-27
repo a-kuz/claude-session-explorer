@@ -54,8 +54,8 @@ struct SessionListView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(selection: Binding(
-                    get: { model.selectedID },
-                    set: { if let id = $0 { model.selectedID = id } }
+                    get: { model.listSelection },
+                    set: { model.updateListSelection($0) }
                 )) {
                     if isSearching {
                         Section {
@@ -92,7 +92,12 @@ struct SessionListView: View {
                 // cheaper than attaching .contextMenu to every row (which made
                 // scrolling janky on long lists).
                 .contextMenu(forSelectionType: String.self) { ids in
-                    if let id = ids.first, let meta = model.allSessions.first(where: { $0.id == id }) {
+                    if ids.count > 1 {
+                        Button("Copy \(ids.count) Sessions with Content") {
+                            model.copySessionsToClipboard(ids)
+                        }
+                    } else if let id = ids.first,
+                              let meta = model.allSessions.first(where: { $0.id == id }) {
                         rowMenu(meta)
                     }
                 }
@@ -113,6 +118,7 @@ struct SessionListView: View {
             }
         }
         Divider()
+        Button("Copy Session with Content") { model.copySessionsToClipboard([meta.id]) }
         Button("Hide Session") { model.hideSession(meta.id) }
         Button("Open in Terminal") { model.selectedID = meta.id; model.openInTerminal() }
         Button("Reveal in Finder") { model.selectedID = meta.id; model.revealInFinder() }
@@ -189,8 +195,8 @@ struct SessionRow: View {
 struct SizeBars: View {
     /// How many of the 4 bars are filled (1…4).
     let level: Int
-    var filled: Color = Color(hex: 0x9AA0AA)
-    var empty: Color = Color(hex: 0xDCDCE0)
+    var filled: Color = .secondary
+    var empty: Color = Color(nsColor: .quaternaryLabelColor)
 
     @Environment(\.s) private var s
 

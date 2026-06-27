@@ -64,7 +64,32 @@ final class AppModel: ObservableObject {
 
     // Selection
     @Published var selectedID: String? {
-        didSet { if selectedID != oldValue { loadSelectedDialog(); persistUIState() } }
+        didSet {
+            if selectedID != oldValue {
+                syncListSelectionToSelected()
+                loadSelectedDialog(); persistUIState()
+            }
+        }
+    }
+    /// Multi-selection of list rows (⌘/⇧-click). The detail pane follows the
+    /// single active row (`selectedID`); this set is what "Copy Selected Sessions"
+    /// acts on. Kept in sync with `selectedID` via the list binding.
+    @Published var listSelection: Set<String> = []
+
+    /// Apply a new list multi-selection coming from the List binding. The detail
+    /// pane follows one row: keep the current `selectedID` if it's still in the
+    /// set, otherwise adopt another member (or clear when empty).
+    func updateListSelection(_ ids: Set<String>) {
+        listSelection = ids
+        if let cur = selectedID, ids.contains(cur) { return }
+        selectedID = ids.first
+    }
+
+    /// Programmatic moves of `selectedID` (search, hide, triage, arrow keys)
+    /// collapse the multi-selection down to that single row.
+    private func syncListSelectionToSelected() {
+        let want: Set<String> = selectedID.map { [$0] } ?? []
+        if listSelection != want { listSelection = want }
     }
     @Published private(set) var dialog: SessionDialog?
     /// Merged turns derived from the dialog (one per speaker change).
@@ -85,12 +110,15 @@ final class AppModel: ObservableObject {
     private(set) var outlineTurns: [DialogTurn] = []
     /// blockID → index within `promptBlocks` (O(1) outline sync). Cached.
     private var promptIndexByID: [String: Int] = [:]
+    /// blockID → index within the full `blocks` array (O(1) jump-distance). Cached.
+    private var blockIndexByID: [String: Int] = [:]
 
     private func rebuildNavCache() {
         promptBlocks = blocks.filter { $0.hasPrompt }
         userTurnIDs = promptBlocks.map { $0.id }
         outlineTurns = promptBlocks.compactMap { $0.promptTurn }
         promptIndexByID = Dictionary(uniqueKeysWithValues: userTurnIDs.enumerated().map { ($1, $0) })
+        blockIndexByID = Dictionary(uniqueKeysWithValues: blocks.enumerated().map { ($1.id, $0) })
     }
     /// Inline images of the open session, in order of appearance (lazy-loaded).
     @Published private(set) var dialogImages: [NSImage] = []
@@ -408,28 +436,49 @@ final class AppModel: ObservableObject {
             let mtime = Loader.fileMtime(path)
             let size = Int(Loader.fileLength(path))
 
+            let rec = byID[id]
             // Unchanged file with up-to-date metadata schema → nothing to do.
-            if let rec = byID[id], rec.fileMtime == mtime, rec.byteSize == size,
+            if let rec, rec.fileMtime == mtime, rec.byteSize == size,
                rec.schemaVersion >= Self.metaSchemaVersion {
                 continue
             }
 
-            // Compute metadata from the file. `parseSessionMeta` reads the file
-            // once and keeps only the small fields it needs (no transcript is
-            // retained), so this is cheap even for a large, growing session.
-            guard let meta = Loader.parseSessionMeta(path) else { continue }
-            store.upsert(meta: meta, offset: size, fileMtime: mtime,
+            // An active session is append-only: when it only grew (cached row,
+            // current schema, file larger than the parsed prefix), read just the
+            // appended tail from `parsedOffset` and fold it into the cached
+            // metadata — instead of re-reading and re-parsing the whole file on
+            // every write, which is the dominant cost for a large live session.
+            var meta: SessionMeta?
+            var newOffset = size
+            if let rec, rec.schemaVersion >= Self.metaSchemaVersion,
+               size > rec.parsedOffset,
+               let prev = byID[id].map({ SessionMeta(record: $0) }),
+               let upd = Loader.updateSessionMeta(prev: prev, filePath: path,
+                                                  fromOffset: UInt64(rec.parsedOffset)) {
+                meta = upd.meta
+                newOffset = Int(upd.newOffset)
+            } else {
+                // Cold parse: new file, shrunk/rotated file, or a schema bump.
+                meta = Loader.parseSessionMeta(path)
+            }
+            guard let meta else { continue }
+            store.upsert(meta: meta, offset: newOffset, fileMtime: mtime,
                          schemaVersion: Self.metaSchemaVersion, into: ctx)
             dirty = true
             sinceSave += 1
 
-            // Persist + push to the UI in batches so a cold first scan fills the
+            // Persist + push to the UI in batches so a COLD first scan fills the
             // list progressively and survives an early quit (no all-or-nothing).
+            // A warm re-sync touches only the handful of changed files, so the
+            // intermediate full-table fetch/publish is pure overhead there — do it
+            // only on the initial scan; warm syncs publish once at the end.
             if sinceSave >= 25 {
                 try? ctx.save()
                 sinceSave = 0
-                let snapshot = store.metas(in: ctx)
-                await MainActor.run { [weak self] in self?.applySynced(snapshot) }
+                if initial {
+                    let snapshot = store.metas(in: ctx)
+                    await MainActor.run { [weak self] in self?.applySynced(snapshot) }
+                }
             }
         }
 
@@ -551,7 +600,7 @@ final class AppModel: ObservableObject {
                 // graph. Stable ids mean unchanged turns keep identity, so only
                 // the new/last turn(s) actually re-render.
                 self.branchGraph = BranchGraph.build(from: self.dialogMessages)
-                self.rebuildTurns()
+                self.rebuildTurnsAppending()
             }
         }
     }
@@ -776,6 +825,44 @@ final class AppModel: ObservableObject {
         recomputeMatches()
     }
 
+    /// Incremental rebuild after a pure tail append (append-only jsonl). A real
+    /// user prompt is a hard turn boundary: every turn before the LAST one in the
+    /// rendered message order is already closed and can't change when lines are
+    /// appended. So we rebuild only from that last boundary, seeding the image
+    /// cursor with the count consumed before it, and splice the result onto the
+    /// stable prefix — instead of re-deriving the whole transcript on every line a
+    /// live session writes. Falls back to a full rebuild when the rendered order
+    /// isn't the raw message order (active branch filter) — there indices wouldn't
+    /// line up, and that isn't the live-append hot path anyway.
+    private func rebuildTurnsAppending() {
+        guard let d = dialog, branchMode == .tree || branchGraph?.hasBranches != true else {
+            rebuildTurns(); return
+        }
+        let msgs = d.messages
+        // Find the last real user prompt; rebuild from there. If none, full build.
+        guard let lastPrompt = msgs.lastIndex(where: { DialogTurn.isRealUserPrompt($0) }) else {
+            rebuildTurns(); return
+        }
+        // Images consumed by messages before the rebuild point seed the cursor so
+        // per-turn image slicing stays aligned with the session-wide image array.
+        var imageCursorStart = 0
+        for k in 0..<lastPrompt { imageCursorStart += msgs[k].imageCount }
+
+        let tailTurns = DialogTurn.build(from: msgs, brief: briefMode,
+                                         fromMessageIndex: lastPrompt,
+                                         imageCursorStart: imageCursorStart)
+        // The stable prefix is every turn before the one led by msgs[lastPrompt].
+        let boundaryID = msgs[lastPrompt].id
+        if let cut = turns.firstIndex(where: { $0.id == boundaryID }) {
+            turns = Array(turns[..<cut]) + tailTurns
+        } else {
+            // Prefix doesn't contain the boundary yet (first build) → full.
+            turns = DialogTurn.build(from: msgs, brief: briefMode)
+        }
+        blocks = DialogBlock.build(from: turns)
+        recomputeMatches()
+    }
+
     /// The message slice to render, per `branchMode`:
     /// - `.tree`: the raw file order (every branch shown; the view indents them).
     /// - otherwise: the active linear path, honoring any `.switcher` overrides.
@@ -921,6 +1008,19 @@ final class AppModel: ObservableObject {
         if idx != turnIndex { turnIndex = idx }
     }
 
+    /// Block index within the navigable prompt blocks, for debug readouts.
+    func promptIndex(of id: String?) -> Int? {
+        guard let id else { return nil }
+        return promptIndexByID[id]
+    }
+
+    /// Index of a block id within the FULL block list (all blocks, not only
+    /// prompt-led ones) — used to measure jump distance for near/far scroll choice.
+    func blockIndex(of id: String?) -> Int? {
+        guard let id else { return nil }
+        return blockIndexByID[id]
+    }
+
     /// Jump straight to a block (from the outline).
     func jumpToTurn(_ id: String) {
         if let idx = promptIndexByID[id] { turnIndex = idx }
@@ -934,6 +1034,14 @@ final class AppModel: ObservableObject {
     /// their output) rendered in place — so the copy is the full exchange.
     func copyText(forBlockIDs ids: Set<String>) -> String {
         let chosen = blocks.filter { ids.contains($0.id) }
+        return Self.plainText(forBlocks: chosen)
+    }
+
+    /// Plain-text transcript of the given blocks (in the order passed) — the
+    /// shared renderer used both for an outline selection and for whole-session
+    /// copying. Stateless, so it can run off the main actor on a freshly loaded
+    /// dialog of any session, not just the open one.
+    nonisolated static func plainText(forBlocks chosen: [DialogBlock]) -> String {
         var out: [String] = []
         for block in chosen {
             for turn in block.turns {
@@ -949,7 +1057,7 @@ final class AppModel: ObservableObject {
     }
 
     /// Full text of a turn: prose and tool calls in their original order.
-    private func turnPlainText(_ turn: DialogTurn) -> String {
+    nonisolated private static func turnPlainText(_ turn: DialogTurn) -> String {
         // Prefer ordered segments (prose interleaved with tools); fall back to
         // bodyChunks if segments weren't built.
         var lines: [String] = []
@@ -973,7 +1081,7 @@ final class AppModel: ObservableObject {
 
     /// A tool call in full — name, complete input, and complete output (no
     /// truncation), so the copied exchange loses nothing.
-    private func toolPlainText(_ tool: ToolUse) -> String {
+    nonisolated private static func toolPlainText(_ tool: ToolUse) -> String {
         var s = "[\(tool.name)]"
         let input = (tool.input.isEmpty ? tool.arg : tool.input)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -991,6 +1099,69 @@ final class AppModel: ObservableObject {
         pb.clearContents()
         pb.setString(text, forType: .string)
         showToast("Blocks copied: \(ids.count)")
+    }
+
+    // MARK: - Copy whole sessions (from the list selection)
+
+    /// Build the active-line blocks of an already-loaded dialog, without any
+    /// per-session UI branch overrides — the deterministic newest-leaf path,
+    /// same as a freshly opened session shows by default.
+    nonisolated static func blocksForFullCopy(_ d: SessionDialog) -> [DialogBlock] {
+        let graph = BranchGraph.build(from: d.messages)
+        let source: [DialogMessage]
+        if graph.hasBranches {
+            source = graph.activePath(in: d.messages).map { d.messages[$0] }
+        } else {
+            source = d.messages
+        }
+        let turns = DialogTurn.build(from: source)
+        return DialogBlock.build(from: turns)
+    }
+
+    /// Copy one or more whole sessions — title header + full transcript each,
+    /// in the list's order. Loads every dialog off the main thread (the open one
+    /// included, for a uniform path) and writes the joined text to the clipboard.
+    /// Menu label that reflects how many sessions ⌘C would copy.
+    var copySessionsLabel: String {
+        let n = copyTargetIDs.count
+        return n > 1 ? "Copy \(n) Sessions with Content" : "Copy Session with Content"
+    }
+
+    /// The list rows ⌘C acts on: the multi-selection if present, else the single
+    /// selected row.
+    private var copyTargetIDs: Set<String> {
+        if !listSelection.isEmpty { return listSelection }
+        return selectedID.map { [$0] } ?? []
+    }
+
+    /// ⌘C from the menu: copy the current list selection with full content.
+    func copySelectedSessions() { copySessionsToClipboard(copyTargetIDs) }
+
+    func copySessionsToClipboard(_ ids: Set<String>) {
+        // Order by the visible list (search-aware); fall back to allSessions for
+        // any id not currently in hits.
+        var metas = hits.map(\.meta).filter { ids.contains($0.id) }
+        let found = Set(metas.map(\.id))
+        metas += allSessions.filter { ids.contains($0.id) && !found.contains($0.id) }
+        guard !metas.isEmpty else { return }
+        showToast(metas.count == 1 ? "Copying session…" : "Copying \(metas.count) sessions…")
+        Task.detached(priority: .userInitiated) {
+            var parts: [String] = []
+            for meta in metas {
+                let d = Loader.loadDialogCached(meta)
+                let body = Self.plainText(forBlocks: Self.blocksForFullCopy(d))
+                let header = "# \(AutoTitle.displayTitle(meta))\n\(meta.projectLabel) · \(meta.id)"
+                parts.append(body.isEmpty ? header : "\(header)\n\n\(body)")
+            }
+            let text = parts.joined(separator: "\n\n════════════════════════\n\n")
+            await MainActor.run {
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(text, forType: .string)
+                self.showToast(metas.count == 1
+                               ? "Session copied" : "Sessions copied: \(metas.count)")
+            }
+        }
     }
 
     // MARK: - Favorites

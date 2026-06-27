@@ -31,6 +31,7 @@ struct HotkeyHelpView: View {
         Group(title: "Session", items: [
             Item(keys: "⌘↵", label: "Open in Terminal"),
             Item(keys: "⌘⇧C", label: "Copy resume command"),
+            Item(keys: "⌘C", label: "Copy session(s) with content"),
             Item(keys: "⌘⇧R", label: "Reveal in Finder"),
             Item(keys: "⌘D", label: "Add to favorites"),
             Item(keys: "⌘⌫", label: "Hide session"),
@@ -75,7 +76,7 @@ struct HotkeyHelpView: View {
                                 HStack(spacing: 10) {
                                     Text(item.keys)
                                         .font(.system(size: 12, weight: .medium, design: .rounded))
-                                        .foregroundStyle(Color(hex: 0x6B7280))
+                                        .foregroundStyle(Color.secondary)
                                         .frame(width: 92, alignment: .leading)
                                     Text(item.label)
                                         .font(.system(size: 12.5))

@@ -28,7 +28,57 @@ enum Loader {
 
     static func parseDate(_ s: String?) -> Date? {
         guard let s = s else { return nil }
+        // jsonl timestamps are a fixed UTC ISO form: "2026-06-11T18:26:18.915Z".
+        // ISO8601DateFormatter is comparatively slow (it dominated parseDate in the
+        // profile, and we call it per message). Parse the fixed layout arithmetically
+        // and only fall back to the formatters for anything that doesn't fit.
+        if let d = fastISO8601UTC(s) { return d }
         return iso.date(from: s) ?? isoNoFrac.date(from: s)
+    }
+
+    /// Days from the Unix epoch (1970-01-01) to the start of `year` (UTC).
+    private static func daysFromEpoch(toStartOf year: Int) -> Int {
+        // Count leap years strictly before `year` since year 1, minus the count
+        // before 1970, to keep the arithmetic in plain Ints.
+        func leaps(before y: Int) -> Int { let p = y - 1; return p/4 - p/100 + p/400 }
+        let years = year - 1970
+        let leapDays = leaps(before: year) - leaps(before: 1970)
+        return years * 365 + leapDays
+    }
+    private static let cumDays = [0,31,59,90,120,151,181,212,243,273,304,334]
+
+    /// Parse the exact "YYYY-MM-DDTHH:MM:SS[.fff]Z" UTC form. Returns nil if the
+    /// string deviates (caller falls back to ISO8601DateFormatter).
+    private static func fastISO8601UTC(_ s: String) -> Date? {
+        let u = Array(s.utf8)
+        // Minimum "YYYY-MM-DDTHH:MM:SSZ" = 20 chars; must end in 'Z'.
+        guard u.count >= 20, u.last == 0x5A /* Z */ else { return nil }
+        func digit(_ i: Int) -> Int? { let c = u[i]; return (c >= 0x30 && c <= 0x39) ? Int(c - 0x30) : nil }
+        func num(_ i: Int, _ n: Int) -> Int? {
+            var v = 0
+            for k in 0..<n { guard let d = digit(i + k) else { return nil }; v = v * 10 + d }
+            return v
+        }
+        guard u[4] == 0x2D, u[7] == 0x2D, u[10] == 0x54, u[13] == 0x3A, u[16] == 0x3A,
+              let year = num(0, 4), let month = num(5, 2), let day = num(8, 2),
+              let hour = num(11, 2), let minute = num(14, 2), let second = num(17, 2),
+              month >= 1, month <= 12, day >= 1, day <= 31 else { return nil }
+        // Fractional seconds: optional ".fff" between SS and Z.
+        var frac = 0.0
+        if u.count > 20, u[19] == 0x2E /* . */ {
+            var i = 20, scale = 0.1, f = 0.0
+            while i < u.count - 1, let d = digit(i) { f += Double(d) * scale; scale /= 10; i += 1 }
+            // Everything between the dot and the trailing Z must be digits.
+            guard i == u.count - 1 else { return nil }
+            frac = f
+        } else if u.count != 20 {
+            return nil
+        }
+        let isLeap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+        var days = daysFromEpoch(toStartOf: year) + cumDays[month - 1] + (day - 1)
+        if month > 2, isLeap { days += 1 }
+        let secs = Double(days * 86400 + hour * 3600 + minute * 60 + second) + frac
+        return Date(timeIntervalSince1970: secs)
     }
 
     /// Claude encodes the project path into the dir name by replacing "/" and
@@ -49,14 +99,13 @@ enum Loader {
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 
-    /// Parse a single session file into metadata.
-    static func parseSessionMeta(_ filePath: String) -> SessionMeta? {
-        guard let content = try? String(contentsOfFile: filePath, encoding: .utf8) else { return nil }
-        let attrs = try? FileManager.default.attributesOfItem(atPath: filePath)
-        let fileMtime = (attrs?[.modificationDate] as? Date) ?? Date()
-        let byteSize = (attrs?[.size] as? Int) ?? content.utf8.count
-        let id = (filePath as NSString).lastPathComponent.replacingOccurrences(of: ".jsonl", with: "")
-
+    /// Running aggregate of the light metadata fields. Every field accumulates
+    /// monotonically over jsonl records in file order, so the same accumulator can
+    /// be filled by a cold full scan OR seeded from a cached row and advanced over
+    /// just the appended tail — jsonl is append-only, so the already-parsed prefix
+    /// never changes. `consume(_:)` folds one parsed record into the running state.
+    struct MetaAccumulator {
+        let id: String
         var customTitle: String?
         var aiTitle: String?
         var cwd: String?
@@ -65,18 +114,36 @@ enum Loader {
         var lastTimestamp: Date?
         var firstTimestamp: Date?
         var lastUserTimestamp: Date?
+        var lastClaudeTimestamp: Date?
         var messageCount = 0
         var userTurnCount = 0
         var model: String?
         var parentSessionId: String?
 
-        content.enumerateLines { rawLine, _ in
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            guard let rec = parseLine(line) else { return }
+        init(id: String) { self.id = id }
+
+        /// Seed from an already-computed meta (a cached row) so the tail picks up
+        /// exactly where the previous parse stopped.
+        init(seed m: SessionMeta) {
+            id = m.id
+            customTitle = m.titleIsCustom ? m.title : nil
+            aiTitle = m.titleIsCustom ? nil : m.title
+            cwd = m.projectPath
+            firstUserText = m.firstUserText
+            lastUserText = m.lastUserText
+            firstTimestamp = m.firstActivity
+            lastTimestamp = m.lastActivity
+            lastUserTimestamp = m.lastUserTime
+            lastClaudeTimestamp = m.lastClaudeTime
+            messageCount = m.messageCount
+            userTurnCount = m.userTurnCount
+            model = m.model
+            parentSessionId = m.parentSessionId
+        }
+
+        mutating func consume(_ rec: [String: Any]) {
             let type = rec["type"] as? String
 
-            // A forked session carries `forkedFrom.sessionId` (its parent) on its
-            // records; capture the first one seen.
             if parentSessionId == nil,
                let ff = rec["forkedFrom"] as? [String: Any],
                let sid = ff["sessionId"] as? String, sid != id {
@@ -95,6 +162,7 @@ enum Loader {
                 if let ts = ts {
                     lastTimestamp = ts
                     if firstTimestamp == nil { firstTimestamp = ts }
+                    if type == "assistant" { lastClaudeTimestamp = ts }
                 }
                 let msg = rec["message"] as? [String: Any]
                 if type == "assistant", model == nil, let m = msg?["model"] as? String {
@@ -102,7 +170,10 @@ enum Loader {
                 }
                 if type == "user" {
                     let c = msg?["content"]
-                    if (rec["isMeta"] as? Bool) == true || MessageContent.isToolResultContent(c) { return }
+                    if (rec["isMeta"] as? Bool) == true || MessageContent.isToolResultContent(c) {
+                        if cwd == nil, let cc = rec["cwd"] as? String { cwd = cc }
+                        return
+                    }
                     let raw = MessageContent.contentToText(c)
                     let text = MessageContent.oneLine(MessageContent.stripNoise(raw))
                     if MessageContent.isMeaningfulUserText(text) {
@@ -118,33 +189,80 @@ enum Loader {
             }
         }
 
-        if firstUserText.isEmpty && lastUserText.isEmpty && messageCount == 0 { return nil }
+        /// Materialize the accumulated state into a `SessionMeta`. Returns nil for
+        /// an empty file (no dialog, no first/last text).
+        func finish(filePath: String, byteSize: Int, fileMtime: Date) -> SessionMeta? {
+            if firstUserText.isEmpty && lastUserText.isEmpty && messageCount == 0 { return nil }
+            let projectPath = cwd ?? decodeProjectDirName(((filePath as NSString).deletingLastPathComponent as NSString).lastPathComponent)
+            let title = customTitle ?? aiTitle
+            let displayTime = lastTimestamp ?? lastUserTimestamp ?? fileMtime
+            return SessionMeta(
+                id: id,
+                filePath: filePath,
+                projectPath: projectPath,
+                projectLabel: projectLabel(from: projectPath),
+                title: title,
+                titleIsCustom: customTitle != nil,
+                lastUserText: lastUserText.isEmpty ? firstUserText : lastUserText,
+                firstUserText: firstUserText.isEmpty ? lastUserText : firstUserText,
+                mtime: displayTime,
+                firstActivity: firstTimestamp,
+                lastActivity: lastTimestamp,
+                messageCount: messageCount,
+                byteSize: byteSize,
+                userTurnCount: userTurnCount,
+                model: model,
+                lastUserTime: lastUserTimestamp,
+                lastClaudeTime: lastClaudeTimestamp,
+                parentSessionId: parentSessionId
+            )
+        }
+    }
 
-        let projectPath = cwd ?? decodeProjectDirName(((filePath as NSString).deletingLastPathComponent as NSString).lastPathComponent)
-        let title = customTitle ?? aiTitle
+    /// Parse a single session file into metadata (cold/full scan).
+    static func parseSessionMeta(_ filePath: String) -> SessionMeta? {
+        guard let content = try? String(contentsOfFile: filePath, encoding: .utf8) else { return nil }
+        let attrs = try? FileManager.default.attributesOfItem(atPath: filePath)
+        let fileMtime = (attrs?[.modificationDate] as? Date) ?? Date()
+        let byteSize = (attrs?[.size] as? Int) ?? content.utf8.count
+        let id = (filePath as NSString).lastPathComponent.replacingOccurrences(of: ".jsonl", with: "")
 
-        // Sort/display by the LAST message of any role (most recent activity),
-        // not specifically the last user message — falling back to file mtime.
-        let displayTime = lastTimestamp ?? lastUserTimestamp ?? fileMtime
+        var acc = MetaAccumulator(id: id)
+        content.enumerateLines { rawLine, _ in
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard let rec = parseLine(line) else { return }
+            acc.consume(rec)
+        }
+        return acc.finish(filePath: filePath, byteSize: byteSize, fileMtime: fileMtime)
+    }
 
-        return SessionMeta(
-            id: id,
-            filePath: filePath,
-            projectPath: projectPath,
-            projectLabel: projectLabel(from: projectPath),
-            title: title,
-            titleIsCustom: customTitle != nil,
-            lastUserText: lastUserText.isEmpty ? firstUserText : lastUserText,
-            firstUserText: firstUserText.isEmpty ? lastUserText : firstUserText,
-            mtime: displayTime,
-            firstActivity: firstTimestamp,
-            lastActivity: lastTimestamp,
-            messageCount: messageCount,
-            byteSize: byteSize,
-            userTurnCount: userTurnCount,
-            model: model,
-            parentSessionId: parentSessionId
-        )
+    /// Incrementally update a session's metadata by reading ONLY the appended tail
+    /// from `fromOffset`. jsonl is append-only, so the cached `prev` already
+    /// reflects every record before `fromOffset`; we seed the accumulator with it
+    /// and fold in just the new lines. Returns nil if the file shrank/rotated
+    /// (caller must fall back to a full `parseSessionMeta`) or vanished.
+    static func updateSessionMeta(prev: SessionMeta, filePath: String, fromOffset: UInt64)
+        -> (meta: SessionMeta, newOffset: UInt64, fileMtime: Date)? {
+        guard let handle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: filePath)) else { return nil }
+        defer { try? handle.close() }
+        let end = (try? handle.seekToEnd()) ?? 0
+        if end < fromOffset { return nil }                 // shrank/rotated → caller re-parses
+        let fileMtime = fileMtime(filePath)
+        if end == fromOffset {                             // mtime touched but no new bytes
+            return (prev, end, fileMtime)
+        }
+        try? handle.seek(toOffset: fromOffset)
+        let data = (try? handle.readToEnd()) ?? Data()
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+
+        var acc = MetaAccumulator(seed: prev)
+        text.enumerateLines { rawLine, _ in
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard let rec = parseLine(line) else { return }
+            acc.consume(rec)
+        }
+        guard let meta = acc.finish(filePath: filePath, byteSize: Int(end), fileMtime: fileMtime) else { return nil }
+        return (meta, end, fileMtime)
     }
 
     /// List every session jsonl file path under the projects dir.
