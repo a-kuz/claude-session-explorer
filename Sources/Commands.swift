@@ -29,6 +29,9 @@ struct AppCommands: Commands {
             Button("Copy Resume Command") { model.copyResume() }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
                 .disabled(model.selectedMeta == nil)
+            Button(model.copySessionsLabel) { model.copySelectedSessions() }
+                .keyboardShortcut("c", modifiers: [.command])
+                .disabled(model.selectedMeta == nil)
             Button("Reveal in Finder") { model.revealInFinder() }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(model.selectedMeta == nil)
@@ -66,7 +69,7 @@ struct AppCommands: Commands {
                 .keyboardShortcut("[", modifiers: [.command])
         }
 
-        CommandMenu("View") {
+        CommandGroup(after: .sidebar) {
             Button(model.briefMode ? "Full View" : "Brief") {
                 model.briefMode.toggle()
             }

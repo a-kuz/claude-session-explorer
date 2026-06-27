@@ -99,19 +99,19 @@ struct ToolbarSearchField: View {
                 if model.matchCount > 0 {
                     HStack(spacing: 1) {
                         Text("\(model.matchIndex + 1)").foregroundStyle(Theme.secondaryText)
-                        Text("/\(model.matchCount)").foregroundStyle(Color(hex: 0xC4C4C9))
+                        Text("/\(model.matchCount)").foregroundStyle(Theme.tertiaryText)
                     }
                     .font(.system(size: 11)).monospacedDigit()
                     HStack(spacing: 1) {
                         Button { model.nextMatch(-1) } label: {
                             Image(systemName: "chevron.up").font(.system(size: 10, weight: .semibold))
                         }
-                        .buttonStyle(.plain).foregroundStyle(Color(hex: 0x9AA0AA))
+                        .buttonStyle(.plain).foregroundStyle(Color.secondary)
                         .help("Previous match (⌘⇧G)")
                         Button { model.nextMatch(1) } label: {
                             Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold))
                         }
-                        .buttonStyle(.plain).foregroundStyle(Color(hex: 0x9AA0AA))
+                        .buttonStyle(.plain).foregroundStyle(Color.secondary)
                         .help("Next match (⌘G)")
                     }
                 } else {

@@ -208,12 +208,15 @@ enum MessageContent {
         }
     }
 
-    /// Strip machinery wrappers (caveats, <command-*>, stdout dumps, reminders)
-    /// from a user message so only the real typed prompt remains.
-    static func stripNoise(_ text: String) -> String {
-        var t = text
-        // Remove paired/standalone machinery tags and their contents.
-        let patterns = [
+    /// Machinery-stripping patterns, compiled once. `replacingOccurrences(options:
+    /// .regularExpression)` recompiles the pattern on every call — with ~20 patterns
+    /// per message this dominated the parse (ICU RegexCompile in the profile). We
+    /// precompile each into an `NSRegularExpression` and reuse it.
+    private static func re(_ pattern: String) -> NSRegularExpression {
+        try! NSRegularExpression(pattern: pattern, options: [])
+    }
+    private static let noiseRegexes: [(re: NSRegularExpression, template: String)] = {
+        let removals = [
             "<local-command-caveat>[\\s\\S]*?</local-command-caveat>",
             "<command-name>[\\s\\S]*?</command-name>",
             "<command-message>[\\s\\S]*?</command-message>",
@@ -230,16 +233,35 @@ enum MessageContent {
             "\\[Image #\\d+\\]",
             "\\[Image: source: [^\\]]+\\]",
             "\\[image\\]", "\\[document\\]",
+            "</?bash-input>",
         ]
-        for p in patterns {
-            t = t.replacingOccurrences(of: p, with: "", options: .regularExpression)
+        return removals.map { (re($0), "") } + [(re("\\n{3,}"), "\n\n")]
+    }()
+
+    /// Strip machinery wrappers (caveats, <command-*>, stdout dumps, reminders)
+    /// from a user message so only the real typed prompt remains.
+    static func stripNoise(_ text: String) -> String {
+        // Fast path: nothing the patterns target is present, so all the tag/bracket
+        // substitutions are no-ops — only the blank-run collapse could fire.
+        let hasTargets = text.utf8.contains(where: { $0 == 0x3C /* < */ || $0 == 0x5B /* [ */ })
+            || text.hasPrefix("Caveat: The messages below")
+        var t = text
+        if hasTargets {
+            for (regex, template) in noiseRegexes.dropLast() {
+                t = applyReplace(regex, template, t)
+            }
         }
-        // Unwrap <bash-input>cmd</bash-input> to just the command text (the tags
-        // are machinery, the command itself is meaningful).
-        t = t.replacingOccurrences(of: "</?bash-input>", with: "", options: .regularExpression)
-        // Collapse the resulting blank runs.
-        t = t.replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
+        // Collapse the resulting blank runs (last entry, "\n{3,}").
+        if let collapse = noiseRegexes.last {
+            t = applyReplace(collapse.re, collapse.template, t)
+        }
         return t.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func applyReplace(_ re: NSRegularExpression, _ template: String, _ s: String) -> String {
+        let ns = s as NSString
+        return re.stringByReplacingMatches(
+            in: s, range: NSRange(location: 0, length: ns.length), withTemplate: template)
     }
 
     /// Is this text a real user prompt worth surfacing (not command/system noise)?
@@ -251,9 +273,11 @@ enum MessageContent {
         return true
     }
 
+    private static let whitespaceRun = re("\\s+")
+
     /// Collapse whitespace and trim for single-line display.
     static func oneLine(_ text: String, max: Int = 400) -> String {
-        let collapsed = text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        let collapsed = applyReplace(whitespaceRun, " ", text)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return collapsed.count > max ? String(collapsed.prefix(max)) : collapsed
     }

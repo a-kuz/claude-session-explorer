@@ -95,9 +95,34 @@ enum OpenSession {
     /// was launched.
     private static let envPrefix = "env CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 "
 
-    /// cd into the project, then resume the exact session.
+    /// The user's login shell, e.g. `/bin/zsh`. Falls back to zsh.
+    private static var loginShell: String {
+        ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+    }
+
+    /// Wrap a resume command so it runs inside the user's LOGIN+INTERACTIVE shell.
+    /// Ghostty (and `do script` in Terminal/iTerm) executes a supplied `command`
+    /// via a bare, profile-less shell — `.zprofile`/`.zshrc` are never sourced, so
+    /// PATH augmentations and shell-function tooling (nvm, cargo env, pyenv shims)
+    /// are absent and the resumed `claude` "can't run anything". Re-running the
+    /// command through `$SHELL -ilc` sources those profiles first, then `exec`s
+    /// claude — identical to opening a tab by hand.
+    ///
+    /// `leadingExec` controls whether the wrapper itself starts with `exec`.
+    /// Terminal/iTerm receive this as a line typed into a shell, so `exec $SHELL …`
+    /// is right (it replaces that shell). Ghostty instead runs `command:` as
+    /// `login -fp … /bin/bash -c exec -l <command>` — it already prepends its own
+    /// `exec -l`, so a leading `exec` here yields `exec -l exec '/bin/zsh' …`, where
+    /// bash reads the second `exec` as exec's program argument → "exec: not found"
+    /// and the window dies instantly. For Ghostty the command must start with the
+    /// shell binary, not `exec`.
+    private static func wrapInLoginShell(_ inner: String, leadingExec: Bool = true) -> String {
+        "\(leadingExec ? "exec " : "")\(shq(loginShell)) -ilc \(shq("exec " + inner))"
+    }
+
+    /// cd into the project, then resume the exact session — inside a login shell.
     static func buildResumeCommand(_ meta: SessionMeta) -> String {
-        "cd \(shq(meta.projectPath)) && \(envPrefix)\(shq(claudePath)) --resume \(shq(meta.id))"
+        wrapInLoginShell("cd \(shq(meta.projectPath)) && \(envPrefix)\(shq(claudePath)) --resume \(shq(meta.id))")
     }
 
     @discardableResult
@@ -141,7 +166,7 @@ enum OpenSession {
     @discardableResult
     private static func openInGhostty(_ meta: SessionMeta, displayTitle: String) -> OpenResult {
         let wd = asEscape(meta.projectPath)
-        let cmd = asEscape("\(envPrefix)\(shq(claudePath)) --resume \(shq(meta.id))")
+        let cmd = asEscape(wrapInLoginShell("\(envPrefix)\(shq(claudePath)) --resume \(shq(meta.id))", leadingExec: false))
         let title = asEscape(displayTitle)
 
         let script = """

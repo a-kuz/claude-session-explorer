@@ -193,11 +193,26 @@ struct BranchGraph {
         for (i, m) in messages.enumerated() where !m.uuid.isEmpty {
             indexOfUUID[m.uuid] = i
         }
-        // Root bucket keyed by "" collects messages whose parent is absent/unknown.
+        // A `parentUuid` often points at a *service* record (attachment, system,
+        // file-history-snapshot) that the dialog parse drops — so it isn't in
+        // `indexOfUUID`. Treating those as roots would shatter one linear thread
+        // into dozens of false "roots" (and hide all but the newest). Records are
+        // read in append-only file order, so when the parent doesn't resolve we
+        // fall back to linking to the previous dialog record by file order. Real
+        // branches (a resolvable `parentUuid` with ≥2 children) are preserved.
+        var prevUUID: String = ""   // uuid of the previous dialog record in file order
         for (i, m) in messages.enumerated() {
             let parent = parentKey(m)
-            let key = (parent != nil && indexOfUUID[parent!] != nil) ? parent! : ""
+            let key: String
+            if let parent, indexOfUUID[parent] != nil {
+                key = parent
+            } else if !prevUUID.isEmpty {
+                key = prevUUID
+            } else {
+                key = ""
+            }
             children[key, default: []].append(i)
+            if !m.uuid.isEmpty { prevUUID = m.uuid }
         }
         var points: Set<Int> = []
         for (key, kids) in children where key != "" && kids.count > 1 {
@@ -297,16 +312,28 @@ struct DialogTurn: Identifiable, Equatable {
     /// tool_result / meta user messages (whose output we hide) are absorbed into
     /// the surrounding assistant turn instead of fragmenting it. This collapses
     /// the long Claude↔tool ping-pong into one Claude turn, like the TUI.
-    static func build(from messages: [DialogMessage], brief: Bool = false) -> [DialogTurn] {
-        // A user message that carries a genuine typed prompt (not tool plumbing).
-        func isRealUserPrompt(_ m: DialogMessage) -> Bool {
-            guard m.role == .user, !m.isToolOrMeta else { return false }
-            return !MessageContent.stripNoise(m.bodyText).isEmpty
-        }
+    /// A user message that carries a genuine typed prompt (not tool plumbing).
+    /// Also the boundary that closes an assistant turn — used to find the last
+    /// stable rebuild point when appending a tail.
+    static func isRealUserPrompt(_ m: DialogMessage) -> Bool {
+        guard m.role == .user, !m.isToolOrMeta else { return false }
+        return !MessageContent.stripNoise(m.bodyText).isEmpty
+    }
 
+    static func build(from messages: [DialogMessage], brief: Bool = false) -> [DialogTurn] {
+        build(from: messages, brief: brief, fromMessageIndex: 0, imageCursorStart: 0)
+    }
+
+    /// Build turns over `messages[fromMessageIndex...]`, with the session-wide
+    /// image index seeded at `imageCursorStart`. The default full build passes
+    /// 0/0; the incremental tail path passes the index of the last user prompt and
+    /// the image count consumed before it, so only the open (last) turn run is
+    /// rebuilt instead of the whole transcript on every appended line.
+    static func build(from messages: [DialogMessage], brief: Bool,
+                      fromMessageIndex: Int, imageCursorStart: Int) -> [DialogTurn] {
         var turns: [DialogTurn] = []
-        var imageCursor = 0   // running index into the session-wide image array
-        var i = 0
+        var imageCursor = imageCursorStart   // running index into the session-wide image array
+        var i = fromMessageIndex
         while i < messages.count {
             let starter = messages[i]
             let asUser = isRealUserPrompt(starter)

@@ -23,11 +23,21 @@ enum Theme {
         colors: [Color(hex: 0xD97757), Color(hex: 0xC25E3F)],
         startPoint: .topLeading, endPoint: .bottomTrailing)
 
-    static let sectionLabel = Color(hex: 0x9A9AA0)
-    static let secondaryText = Color(hex: 0x86868B)
-    static let tertiaryText = Color(hex: 0xA1A1A6)
-    static let codeBg = Color(hex: 0xF0F0F2)
-    static let highlight = Color(hex: 0xFFE08A)
+    // Text tiers — native semantic colors, so they invert with the appearance.
+    static let primaryText = Color.primary
+    static let secondaryText = Color.secondary
+    static let tertiaryText = Color(nsColor: .tertiaryLabelColor)
+    static let sectionLabel = Color(nsColor: .tertiaryLabelColor)
+
+    // Surfaces — native semantic backgrounds.
+    static let cardBg = Color(nsColor: .controlBackgroundColor)
+    static let panelBg = Color(nsColor: .underPageBackgroundColor)
+    static let codeBg = Color(nsColor: .quaternarySystemFill)
+
+    // A hairline rule / quiet fill that reads on either appearance.
+    static let rule = Color.primary.opacity(0.12)
+
+    static let highlight = Color(hex: 0xFFE08A).opacity(0.85)
 }
 
 extension Color {
