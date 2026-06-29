@@ -1,14 +1,12 @@
-<table>
-<tr>
-<td><img src="assets/icon.png" alt="Session Explorer icon" width="128"></td>
-<td>
-<h1>Session Explorer (macOS)</h1>
+<img src="assets/icon.png" alt="Session Explorer icon" width="104" align="left" hspace="20" vspace="4">
+
+### Session Explorer (macOS)
+
 A native macOS app (SwiftUI) for browsing Claude Code sessions
-(<code>~/.claude/projects/*.jsonl</code>) — search across every conversation, read
+(`~/.claude/projects/*.jsonl`) — search across every conversation, read
 transcripts comfortably, and resume any session in your terminal.
-</td>
-</tr>
-</table>
+
+<br clear="left">
 
 ![Session Explorer — sidebar, session list, conversation, and outline](assets/screenshoot-3.png)
 
