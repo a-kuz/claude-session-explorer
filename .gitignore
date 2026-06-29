@@ -14,3 +14,7 @@ xcuserdata/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Locally installed agent skills
+.agents/
+skills-lock.json

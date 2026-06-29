@@ -44,6 +44,13 @@ final class AppModel: ObservableObject {
     @Published var monoFont: String = "" {
         didSet { DialogFonts.monoFamily = monoFont; bumpFonts(); persistUIState() }
     }
+
+    /// Max characters of a tool's output kept when copying sessions/blocks to the
+    /// clipboard; the overflow is replaced by a `… (N more chars)` marker. 0 = no
+    /// limit (copy the full output). Prose and tool input are never truncated.
+    @Published var copyToolOutputLimit: Int = 0 {
+        didSet { persistUIState() }
+    }
     /// Bumped on a font change so the transcript view re-renders its `Text` (the
     /// font lives in a global, not in the model the views diff against).
     @Published private(set) var fontTick = 0
@@ -309,6 +316,7 @@ final class AppModel: ObservableObject {
         static let claudePath = "ui.claudePath"     // absolute path override
         static let proseFont = "ui.proseFont"       // conversation prose family
         static let monoFont = "ui.monoFont"         // conversation mono family
+        static let copyToolLimit = "ui.copyToolOutputLimit" // 0 = no limit
     }
 
     private func restoreUIState() {
@@ -338,6 +346,7 @@ final class AppModel: ObservableObject {
         claudePath = d.string(forKey: K.claudePath) ?? ""
         proseFont = d.string(forKey: K.proseFont) ?? ""
         monoFont = d.string(forKey: K.monoFont) ?? ""
+        copyToolOutputLimit = max(0, d.integer(forKey: K.copyToolLimit))
         OpenSession.terminal = terminalApp
         OpenSession.claudePathOverride = claudePath
         DialogFonts.proseFamily = proseFont
@@ -383,6 +392,7 @@ final class AppModel: ObservableObject {
         d.set(claudePath, forKey: K.claudePath)
         d.set(proseFont, forKey: K.proseFont)
         d.set(monoFont, forKey: K.monoFont)
+        d.set(copyToolOutputLimit, forKey: K.copyToolLimit)
         d.set(selectedID, forKey: K.selected)
     }
 
@@ -1034,19 +1044,23 @@ final class AppModel: ObservableObject {
     /// their output) rendered in place — so the copy is the full exchange.
     func copyText(forBlockIDs ids: Set<String>) -> String {
         let chosen = blocks.filter { ids.contains($0.id) }
-        return Self.plainText(forBlocks: chosen)
+        return Self.plainText(forBlocks: chosen, toolOutputLimit: copyToolOutputLimit)
     }
 
     /// Plain-text transcript of the given blocks (in the order passed) — the
     /// shared renderer used both for an outline selection and for whole-session
     /// copying. Stateless, so it can run off the main actor on a freshly loaded
     /// dialog of any session, not just the open one.
-    nonisolated static func plainText(forBlocks chosen: [DialogBlock]) -> String {
+    /// `toolOutputLimit` caps the characters kept from each tool's output (0 = no
+    /// limit); prose and tool input are always copied in full.
+    nonisolated static func plainText(forBlocks chosen: [DialogBlock],
+                                      toolOutputLimit: Int = 0) -> String {
         var out: [String] = []
         for block in chosen {
             for turn in block.turns {
-                let who = turn.role == .user ? "You" : "Claude"
-                let body = turnPlainText(turn)
+                var who = turn.role == .user ? "You" : "Claude"
+                if let ts = turn.timestamp { who += " · \(Format.longDateTime(ts))" }
+                let body = turnPlainText(turn, toolOutputLimit: toolOutputLimit)
                 guard !body.isEmpty else { continue }
                 out.append("\(who):\n\(body)")
             }
@@ -1057,7 +1071,8 @@ final class AppModel: ObservableObject {
     }
 
     /// Full text of a turn: prose and tool calls in their original order.
-    nonisolated private static func turnPlainText(_ turn: DialogTurn) -> String {
+    nonisolated private static func turnPlainText(_ turn: DialogTurn,
+                                                  toolOutputLimit: Int) -> String {
         // Prefer ordered segments (prose interleaved with tools); fall back to
         // bodyChunks if segments weren't built.
         var lines: [String] = []
@@ -1068,27 +1083,37 @@ final class AppModel: ObservableObject {
                     let t = blocks.map(\.plainText).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
                     if !t.isEmpty { lines.append(t) }
                 case .tool(let tool):
-                    lines.append(toolPlainText(tool))
+                    lines.append(toolPlainText(tool, outputLimit: toolOutputLimit))
                 }
             }
         } else {
             let t = turn.bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
             if !t.isEmpty { lines.append(t) }
-            for tool in turn.toolUses { lines.append(toolPlainText(tool)) }
+            for tool in turn.toolUses { lines.append(toolPlainText(tool, outputLimit: toolOutputLimit)) }
         }
         return lines.joined(separator: "\n\n")
     }
 
-    /// A tool call in full — name, complete input, and complete output (no
-    /// truncation), so the copied exchange loses nothing.
-    nonisolated private static func toolPlainText(_ tool: ToolUse) -> String {
+    /// A tool call as text — name, complete input, and output. The output is kept
+    /// in full when `outputLimit` is 0, otherwise capped to that many characters
+    /// with a `… (N more chars)` marker for the overflow.
+    nonisolated private static func toolPlainText(_ tool: ToolUse, outputLimit: Int) -> String {
         var s = "[\(tool.name)]"
         let input = (tool.input.isEmpty ? tool.arg : tool.input)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !input.isEmpty { s += "\n\(input)" }
         let outTxt = tool.output.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !outTxt.isEmpty { s += "\n→\n\(outTxt)" }
+        if !outTxt.isEmpty { s += "\n→\n\(clampOutput(outTxt, limit: outputLimit))" }
         return s
+    }
+
+    /// Truncate to `limit` characters (counting Characters, not UTF-16 units),
+    /// appending a marker with how many were dropped. `limit <= 0` keeps it whole.
+    nonisolated private static func clampOutput(_ text: String, limit: Int) -> String {
+        guard limit > 0, text.count > limit else { return text }
+        let kept = String(text.prefix(limit))
+        let dropped = text.count - limit
+        return "\(kept)\n… (\(dropped) more chars)"
     }
 
     /// Copy the selected outline blocks to the clipboard.
@@ -1145,11 +1170,13 @@ final class AppModel: ObservableObject {
         metas += allSessions.filter { ids.contains($0.id) && !found.contains($0.id) }
         guard !metas.isEmpty else { return }
         showToast(metas.count == 1 ? "Copying session…" : "Copying \(metas.count) sessions…")
+        let toolLimit = copyToolOutputLimit
         Task.detached(priority: .userInitiated) {
             var parts: [String] = []
             for meta in metas {
                 let d = Loader.loadDialogCached(meta)
-                let body = Self.plainText(forBlocks: Self.blocksForFullCopy(d))
+                let body = Self.plainText(forBlocks: Self.blocksForFullCopy(d),
+                                          toolOutputLimit: toolLimit)
                 let header = "# \(AutoTitle.displayTitle(meta))\n\(meta.projectLabel) · \(meta.id)"
                 parts.append(body.isEmpty ? header : "\(header)\n\n\(body)")
             }
