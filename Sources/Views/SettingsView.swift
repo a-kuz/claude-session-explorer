@@ -67,8 +67,37 @@ private struct DialogSettings: View {
                     Text(mode.label).tag(mode)
                 }
             }
+            CopyOutputLimitField(limit: $model.copyToolOutputLimit)
         }
         .padding(20)
+    }
+}
+
+/// Caps how many characters of each tool's output are placed on the clipboard
+/// when copying sessions/blocks. The toggle switches between "full" (0) and a
+/// numeric cap; the last non-zero value is remembered while the toggle is off.
+private struct CopyOutputLimitField: View {
+    @Binding var limit: Int
+
+    @State private var lastNonZero = 2000
+
+    private var limited: Binding<Bool> {
+        Binding(get: { limit > 0 },
+                set: { on in limit = on ? lastNonZero : 0 })
+    }
+
+    var body: some View {
+        Toggle("Limit copied tool output", isOn: limited)
+        if limit > 0 {
+            LabeledContent("Max characters per output") {
+                TextField("", value: Binding(
+                    get: { limit },
+                    set: { limit = max(1, $0); lastNonZero = limit }
+                ), format: .number)
+                .frame(width: 90)
+                .multilineTextAlignment(.trailing)
+            }
+        }
     }
 }
 
