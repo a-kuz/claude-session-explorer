@@ -1,8 +1,12 @@
+<img src="assets/icon.png" alt="Session Explorer icon" width="128" align="left">
+
 # Session Explorer (macOS)
 
 A native macOS app (SwiftUI) for browsing Claude Code sessions
 (`~/.claude/projects/*.jsonl`) — search across every conversation, read
 transcripts comfortably, and resume any session in your terminal.
+
+<br clear="left">
 
 ![Session Explorer — sidebar, session list, conversation, and outline](assets/screenshoot-3.png)
 
