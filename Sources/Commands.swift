@@ -32,6 +32,9 @@ struct AppCommands: Commands {
             Button(model.copySessionsLabel) { model.copySelectedSessions() }
                 .keyboardShortcut("c", modifiers: [.command])
                 .disabled(model.selectedMeta == nil)
+            Button("Copy Sessions since…") { model.copySelectedSessionsSince() }
+                .keyboardShortcut("c", modifiers: [.command, .option])
+                .disabled(model.selectedMeta == nil)
             Button("Reveal in Finder") { model.revealInFinder() }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(model.selectedMeta == nil)

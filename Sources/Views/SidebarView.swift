@@ -11,6 +11,10 @@ struct SidebarView: View {
                 attentionRow
                 quickRow(.favorites, icon: "star.fill", iconColor: Color(hex: 0xFEBC2E),
                          title: "Favorites", count: model.favorites.count)
+                if !model.hidden.isEmpty {
+                    quickRow(.hidden, icon: "eye.slash", title: "Hidden",
+                             count: model.hidden.count)
+                }
             }
 
             Section {
