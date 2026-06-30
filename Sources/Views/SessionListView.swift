@@ -96,6 +96,14 @@ struct SessionListView: View {
                         Button("Copy \(ids.count) Sessions with Content") {
                             model.copySessionsToClipboard(ids)
                         }
+                        Button("Copy \(ids.count) Sessions since…") {
+                            model.copySessionsSincePrompt(ids)
+                        }
+                        if ids.allSatisfy(model.isHidden) {
+                            Button("Unhide \(ids.count) Sessions") {
+                                ids.forEach(model.unhideSession)
+                            }
+                        }
                     } else if let id = ids.first,
                               let meta = model.allSessions.first(where: { $0.id == id }) {
                         rowMenu(meta)
@@ -119,7 +127,12 @@ struct SessionListView: View {
         }
         Divider()
         Button("Copy Session with Content") { model.copySessionsToClipboard([meta.id]) }
-        Button("Hide Session") { model.hideSession(meta.id) }
+        Button("Copy Session since…") { model.copySessionsSincePrompt([meta.id]) }
+        if model.isHidden(meta.id) {
+            Button("Unhide Session") { model.unhideSession(meta.id) }
+        } else {
+            Button("Hide Session") { model.hideSession(meta.id) }
+        }
         Button("Open in Terminal") { model.selectedID = meta.id; model.openInTerminal() }
         Button("Reveal in Finder") { model.selectedID = meta.id; model.revealInFinder() }
     }

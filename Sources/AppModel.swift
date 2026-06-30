@@ -20,6 +20,7 @@ final class AppModel: ObservableObject {
     enum Scope: Hashable {
         case all
         case favorites
+        case hidden
         case today
         case last24h
         case last2d
@@ -379,7 +380,8 @@ final class AppModel: ObservableObject {
         d.set(Double(outlineWidth), forKey: K.wOutline)
         let scopeStr: String
         switch scope {
-        case .all: scopeStr = "all"
+        // "Hidden" is a transient view; on restore it falls back to All.
+        case .all, .hidden: scopeStr = "all"
         case .favorites: scopeStr = "favorites"
         case .today: scopeStr = "today"
         case .last24h: scopeStr = "last24h"
@@ -632,6 +634,7 @@ final class AppModel: ObservableObject {
         switch scope {
         case .all: return true
         case .favorites: return favorites.contains(s.id)
+        case .hidden: return hidden.contains(s.id)
         case .today: return cal.isDateInToday(s.mtime)
         case .last24h:
             guard let t = cal.date(byAdding: .hour, value: -24, to: now) else { return true }
@@ -653,7 +656,11 @@ final class AppModel: ObservableObject {
     private func candidatesForFilter() -> [SessionMeta] {
         let now = Date()
         let cal = Calendar.current
-        // Hidden sessions never appear; both axes (scope + projects) apply.
+        // The "Hidden" scope shows ONLY hidden sessions; every other scope
+        // excludes them. The project axis still applies in both cases.
+        if scope == .hidden {
+            return allSessions.filter { hidden.contains($0.id) && passesProjects($0) }
+        }
         return allSessions.filter {
             !hidden.contains($0.id) && passesScope($0, now: now, cal: cal) && passesProjects($0)
         }
@@ -1143,6 +1150,18 @@ final class AppModel: ObservableObject {
         return DialogBlock.build(from: turns)
     }
 
+    /// Keep only blocks at or newer than `since` — by the block's leading turn
+    /// timestamp (the user prompt, or first assistant turn for a promptless one).
+    /// A block whose lead turn has no timestamp is dropped when a threshold is set.
+    /// `since == nil` returns the blocks unchanged.
+    nonisolated static func blocks(_ blocks: [DialogBlock], newerThan since: Date?) -> [DialogBlock] {
+        guard let since else { return blocks }
+        return blocks.filter { block in
+            guard let ts = block.turns.first?.timestamp else { return false }
+            return ts >= since
+        }
+    }
+
     /// Copy one or more whole sessions — title header + full transcript each,
     /// in the list's order. Loads every dialog off the main thread (the open one
     /// included, for a uniform path) and writes the joined text to the clipboard.
@@ -1162,7 +1181,9 @@ final class AppModel: ObservableObject {
     /// ⌘C from the menu: copy the current list selection with full content.
     func copySelectedSessions() { copySessionsToClipboard(copyTargetIDs) }
 
-    func copySessionsToClipboard(_ ids: Set<String>) {
+    /// Copy whole sessions; when `since` is set, only blocks at or newer than that
+    /// date are kept (a session that ends up empty contributes just its header).
+    func copySessionsToClipboard(_ ids: Set<String>, since: Date? = nil) {
         // Order by the visible list (search-aware); fall back to allSessions for
         // any id not currently in hits.
         var metas = hits.map(\.meta).filter { ids.contains($0.id) }
@@ -1175,8 +1196,8 @@ final class AppModel: ObservableObject {
             var parts: [String] = []
             for meta in metas {
                 let d = Loader.loadDialogCached(meta)
-                let body = Self.plainText(forBlocks: Self.blocksForFullCopy(d),
-                                          toolOutputLimit: toolLimit)
+                let kept = Self.blocks(Self.blocksForFullCopy(d), newerThan: since)
+                let body = Self.plainText(forBlocks: kept, toolOutputLimit: toolLimit)
                 let header = "# \(AutoTitle.displayTitle(meta))\n\(meta.projectLabel) · \(meta.id)"
                 parts.append(body.isEmpty ? header : "\(header)\n\n\(body)")
             }
@@ -1189,6 +1210,34 @@ final class AppModel: ObservableObject {
                                ? "Session copied" : "Sessions copied: \(metas.count)")
             }
         }
+    }
+
+    /// Prompt for a cutoff date, then copy the given sessions keeping only blocks
+    /// at or newer than it. Cancel aborts the copy.
+    func copySessionsSincePrompt(_ ids: Set<String>) {
+        guard !ids.isEmpty, let since = Self.askCutoffDate() else { return }
+        copySessionsToClipboard(ids, since: since)
+    }
+
+    /// ⌘C target with a date prompt: act on the list selection.
+    func copySelectedSessionsSince() { copySessionsSincePrompt(copyTargetIDs) }
+
+    /// Modal date picker (NSAlert + NSDatePicker). Returns nil on Cancel.
+    /// Defaults to the start of today.
+    private static func askCutoffDate() -> Date? {
+        let alert = NSAlert()
+        alert.messageText = "Copy blocks since…"
+        alert.informativeText = "Only replies at or newer than this date will be copied."
+        alert.addButton(withTitle: "Copy")
+        alert.addButton(withTitle: "Cancel")
+
+        let picker = NSDatePicker(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+        picker.datePickerStyle = .textFieldAndStepper
+        picker.datePickerElements = [.yearMonthDay, .hourMinute]
+        picker.dateValue = Calendar.current.startOfDay(for: Date())
+        alert.accessoryView = picker
+
+        return alert.runModal() == .alertFirstButtonReturn ? picker.dateValue : nil
     }
 
     // MARK: - Favorites
@@ -1219,6 +1268,22 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(Array(hidden), forKey: hiddenKey)
         recomputeHits(instant: true)
         selectedID = id
+        showToast("Session restored")
+    }
+
+    /// Un-hide a specific session (from the Hidden list). Drops it from the undo
+    /// stack too so a later Ctrl+Z doesn't try to restore an already-visible row.
+    func unhideSession(_ id: String) {
+        guard hidden.contains(id) else { return }
+        hidden.remove(id)
+        hiddenUndo.removeAll { $0 == id }
+        UserDefaults.standard.set(Array(hidden), forKey: hiddenKey)
+        // Leaving the Hidden scope empty would show a blank list — fall back to All.
+        if hidden.isEmpty && scope == .hidden { scope = .all }
+        recomputeHits(instant: true)
+        if !(filteredHits.contains { $0.meta.id == selectedID }) {
+            selectedID = filteredHits.first?.meta.id
+        }
         showToast("Session restored")
     }
 
