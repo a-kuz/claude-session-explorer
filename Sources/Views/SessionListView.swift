@@ -50,8 +50,14 @@ struct SessionListView: View {
     var body: some View {
         Group {
             if model.loading {
-                ProgressView("Scanning sessions…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 10) {
+                    ClaudeBurstView()
+                        .frame(width: 110, height: 110)
+                    Text("Scanning sessions…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(selection: Binding(
                     get: { model.listSelection },
