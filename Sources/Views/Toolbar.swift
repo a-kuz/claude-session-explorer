@@ -91,7 +91,8 @@ struct ToolbarSearchField: View {
             .frame(maxWidth: .infinity)
             if active, !model.query.isEmpty {
                 if model.searching {
-                    ProgressView().controlSize(.small).scaleEffect(0.7)
+                    ClaudeBurstView(options: .init(zoom: 1.5))
+                        .frame(width: 20, height: 20)
                 }
                 // In-conversation match counter "N/total" + prev/next chevrons,
                 // mirroring the mock. Falls back to the session hit count when no
