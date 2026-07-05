@@ -186,6 +186,11 @@ identity is not lost and SwiftUI re-renders only what is new.
 menus/hotkeys (`AppCommands`). `Theme.swift`, `Markdown.swift`, `Format.swift`,
 `FlowLayout.swift`, `Scaling.swift` — styling and utilities.
 
+## Workflow
+
+This is a personal pet project — zero ceremony. After completing a change (built
+successfully), commit and push right away; no need to ask permission.
+
 ## Conventions
 
 - **Don't simplify.** Don't throw out invariants, edge-case handling,
