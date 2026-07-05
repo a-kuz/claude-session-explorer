@@ -2,6 +2,7 @@
 // (/s/<id> — read-only set fetched from the worker).
 
 import { displayTitle } from "./autotitle";
+import { initBurst } from "./burst";
 import * as idb from "./idb";
 import { decodeProjectDirName, parseDialog, parseSessionMeta } from "./parser";
 import { renderDialog, renderOutline } from "./render";
@@ -372,6 +373,7 @@ async function bootShared(id: string) {
 
 searchInput.addEventListener("input", () => renderList());
 setupMobileNav();
+initBurst();
 
 if (sharedId) void bootShared(sharedId);
 else void bootLocal();
