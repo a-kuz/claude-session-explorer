@@ -56,6 +56,8 @@ struct TurnView: View {
     @Environment(\.uiScale) private var scale
     @Environment(\.s) private var s
     @Environment(\.editPrompt) private var editPrompt
+    /// Cursor is over the prompt heading — reveals the edit (pencil) button.
+    @State private var hovering = false
 
     private var isUser: Bool { turn.role == .user }
 
@@ -83,8 +85,20 @@ struct TurnView: View {
                 .foregroundStyle(Color.primary)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
+            Spacer(minLength: 4)
+            // Pencil on hover: the primary way into the prompt editor (the text
+            // itself is selection-enabled, so right-click there shows the system
+            // selection menu, not our contextMenu).
+            Button { editPrompt(turn.id) } label: {
+                Image(systemName: "pencil")
+                    .font(.system(size: 12 * scale, weight: .medium))
+                    .foregroundStyle(Theme.tertiaryText)
+            }
+            .buttonStyle(.plain)
+            .help("Edit Prompt")
+            .opacity(hovering ? 1 : 0)
+            .layoutPriority(1)
             if let ts = turn.timestamp {
-                Spacer(minLength: 4)
                 Text(Format.timeOrDate(ts))
                     .font(.system(size: 11 * scale)).foregroundStyle(Theme.tertiaryText)
                     .layoutPriority(1)
@@ -97,6 +111,7 @@ struct TurnView: View {
                 .fill(isFocused ? Theme.accent : Theme.rule)
                 .frame(width: s(2.5))
         }
+        .onHover { hovering = $0 }
         .contextMenu {
             Button("Edit Prompt…") { editPrompt(turn.id) }
         }
