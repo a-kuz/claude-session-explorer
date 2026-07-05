@@ -6,6 +6,7 @@
   "routes": [
     { "pattern": "claude-sessions.a-kuz.online", "custom_domain": true }
   ],
+  "workers_dev": true,
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
