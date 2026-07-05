@@ -41,6 +41,14 @@ struct RootView: View {
         .animation(.easeInOut(duration: 0.2), value: model.toast)
         .toolbar { MainToolbar() }
         .sheet(isPresented: $model.showHotkeyHelp) { HotkeyHelpView() }
+        .sheet(item: $model.promptEdit) { edit in PromptEditView(edit: edit) }
+        .environment(\.editPrompt, EditPromptAction { [weak model] in model?.beginEditPrompt(turnID: $0) })
+        // Share-by-link progress/result. Dismissal while uploading is allowed —
+        // the upload keeps running; only the sheet state is cleared on close.
+        .sheet(isPresented: Binding(get: { model.shareState != nil },
+                                    set: { if !$0 { model.shareState = nil } })) {
+            ShareSheetView()
+        }
         .background(ModalKeyMonitor(model: model))
     }
 

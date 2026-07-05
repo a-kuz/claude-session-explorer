@@ -5,6 +5,7 @@ import SwiftUI
 import Combine
 import SwiftData
 import AppKit
+import UniformTypeIdentifiers
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -52,6 +53,18 @@ final class AppModel: ObservableObject {
     @Published var copyToolOutputLimit: Int = 0 {
         didSet { persistUIState() }
     }
+    /// Макс. символов prose-блока для ОТОБРАЖЕНИЯ; overflow заменяется пометкой
+    /// «… ещё ~N КБ скрыто». Защита от полотен на 1M+ символов, которые вешают
+    /// CoreText-typesetter. 0 = без лимита. Дефолт 40000.
+    @Published var maxRenderChars: Int = 40_000 {
+        didSet {
+            if maxRenderChars != oldValue {
+                MessageContent.maxRenderChars = maxRenderChars
+                rebuildTurns()
+                persistUIState()
+            }
+        }
+    }
     /// Bumped on a font change so the transcript view re-renders its `Text` (the
     /// font lives in a global, not in the model the views diff against).
     @Published private(set) var fontTick = 0
@@ -93,6 +106,13 @@ final class AppModel: ObservableObject {
         selectedID = ids.first
     }
 
+    /// Снять выбор полностью: пустой detail-pane. `selectedID = nil` через свой
+    /// didSet вызовет loadSelectedDialog(), который отменит идущий loadTask.
+    func clearSelection() {
+        listSelection = []
+        selectedID = nil
+    }
+
     /// Programmatic moves of `selectedID` (search, hide, triage, arrow keys)
     /// collapse the multi-selection down to that single row.
     private func syncListSelectionToSelected() {
@@ -125,8 +145,12 @@ final class AppModel: ObservableObject {
         promptBlocks = blocks.filter { $0.hasPrompt }
         userTurnIDs = promptBlocks.map { $0.id }
         outlineTurns = promptBlocks.compactMap { $0.promptTurn }
-        promptIndexByID = Dictionary(uniqueKeysWithValues: userTurnIDs.enumerated().map { ($1, $0) })
-        blockIndexByID = Dictionary(uniqueKeysWithValues: blocks.enumerated().map { ($1.id, $0) })
+        // Дубликаты id возможны (raw-runs нейробота: resume/queue-operation
+        // записи переиспользуют id) — uniqueKeysWithValues на них фатально
+        // падает _MergeError. Берём первое вхождение: навигация прыгает на
+        // первый блок с таким id.
+        promptIndexByID = Dictionary(userTurnIDs.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        blockIndexByID = Dictionary(blocks.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
     /// Inline images of the open session, in order of appearance (lazy-loaded).
     @Published private(set) var dialogImages: [NSImage] = []
@@ -318,6 +342,7 @@ final class AppModel: ObservableObject {
         static let proseFont = "ui.proseFont"       // conversation prose family
         static let monoFont = "ui.monoFont"         // conversation mono family
         static let copyToolLimit = "ui.copyToolOutputLimit" // 0 = no limit
+        static let maxRender = "ui.maxRenderChars"          // 0 = no limit
     }
 
     private func restoreUIState() {
@@ -348,6 +373,8 @@ final class AppModel: ObservableObject {
         proseFont = d.string(forKey: K.proseFont) ?? ""
         monoFont = d.string(forKey: K.monoFont) ?? ""
         copyToolOutputLimit = max(0, d.integer(forKey: K.copyToolLimit))
+        if d.object(forKey: K.maxRender) != nil { maxRenderChars = max(0, d.integer(forKey: K.maxRender)) }
+        MessageContent.maxRenderChars = maxRenderChars
         OpenSession.terminal = terminalApp
         OpenSession.claudePathOverride = claudePath
         DialogFonts.proseFamily = proseFont
@@ -395,6 +422,7 @@ final class AppModel: ObservableObject {
         d.set(proseFont, forKey: K.proseFont)
         d.set(monoFont, forKey: K.monoFont)
         d.set(copyToolOutputLimit, forKey: K.copyToolLimit)
+        d.set(maxRenderChars, forKey: K.maxRender)
         d.set(selectedID, forKey: K.selected)
     }
 
@@ -599,7 +627,10 @@ final class AppModel: ObservableObject {
                     let d = Loader.loadDialog(path)
                     self.dialogMessages = d.messages
                     self.dialogOffset = Loader.fileLength(path)
-                    self.setDialog(d)
+                    self.dialog = d
+                    self.branchGraph = BranchGraph.build(from: d.messages)
+                    self.branchChoice = [:]
+                    self.rebuildTurns()
                     return
                 }
                 guard !tail.messages.isEmpty else {
@@ -658,10 +689,12 @@ final class AppModel: ObservableObject {
         let cal = Calendar.current
         // The "Hidden" scope shows ONLY hidden sessions; every other scope
         // excludes them. The project axis still applies in both cases.
+        // Explicitly opened files (⌘O) always stay visible, ahead of the library
+        // — the user just asked for them; scope/project filters don't apply.
         if scope == .hidden {
-            return allSessions.filter { hidden.contains($0.id) && passesProjects($0) }
+            return externalSessions + allSessions.filter { hidden.contains($0.id) && passesProjects($0) }
         }
-        return allSessions.filter {
+        return externalSessions + allSessions.filter {
             !hidden.contains($0.id) && passesScope($0, now: now, cal: cal) && passesProjects($0)
         }
     }
@@ -763,33 +796,50 @@ final class AppModel: ObservableObject {
 
     var selectedMeta: SessionMeta? {
         guard let id = selectedID else { return nil }
-        return allSessions.first { $0.id == id }
+        return allSessions.first { $0.id == id } ?? externalSessions.first { $0.id == id }
     }
 
     /// Raw messages of the open dialog and the byte offset already consumed —
     /// the basis for append-only incremental updates.
     private var dialogMessages: [DialogMessage] = []
     private var dialogOffset: UInt64 = 0
+    /// Текущая загрузка/билд открываемой сессии. Отменяется при смене выбора
+    /// (или сбросе в nil) — клик на пустое место мгновенно прерывает тяжёлый
+    /// build/render гигантской сессии, а не ждёт его на main-thread.
+    private var loadTask: Task<Void, Never>?
 
     private func loadSelectedDialog() {
+        loadTask?.cancel()
+        loadTask = nil
         guard let meta = selectedMeta else {
-            dialog = nil; turns = []; dialogMessages = []; dialogOffset = 0; dialogImages = []
+            dialog = nil; turns = []; blocks = []; dialogMessages = []
+            dialogOffset = 0; dialogImages = []
             recomputeMatches(); return
         }
         loadImagesFor(meta)
-        // Read the dialog from the jsonl off the main thread (Loader keeps a
-        // small LRU of recently opened dialogs in memory). The full transcript
-        // is never persisted in the DB.
+        // Чтение jsonl + тяжёлый build турнов/блоков — ОБА off main-thread.
+        // На main отдаём уже готовые структуры (одно мгновенное присваивание),
+        // поэтому UI не виснет и переключение сессий отзывчиво даже на полотнах.
         let path = meta.filePath
-        Task.detached(priority: .userInitiated) {
+        let brief = briefMode
+        loadTask = Task.detached(priority: .userInitiated) {
             let d = Loader.loadDialogCached(meta)
+            if Task.isCancelled { return }
             let len = Loader.fileLength(path)
+            let mtime = Loader.fileMtime(path)
+            // build вне main
+            let source = Self.messagesForRenderStatic(d.messages, brief: brief)
+            if Task.isCancelled { return }
+            let builtTurns = DialogTurn.build(from: source, brief: brief)
+            if Task.isCancelled { return }
+            let builtBlocks = DialogBlock.build(from: builtTurns)
+            if Task.isCancelled { return }
             await MainActor.run {
-                guard self.selectedID == meta.id else { return }
+                guard !Task.isCancelled, self.selectedID == meta.id else { return }
                 self.dialogMessages = d.messages
                 self.dialogOffset = len
-                self.openDialogMtime = Loader.fileMtime(path)
-                self.setDialog(d)
+                self.openDialogMtime = mtime
+                self.applyDialog(d, turns: builtTurns, blocks: builtBlocks)
             }
         }
     }
@@ -814,22 +864,34 @@ final class AppModel: ObservableObject {
         selectedID = list[next].meta.id
     }
 
-    /// Build merged turns and refresh derived navigation state. Opens the
-    /// session scrolled to its last turn (most recent reply), unless a search is
-    /// active (then we jump to the first match instead).
-    private func setDialog(_ d: SessionDialog) {
+    /// Применяет УЖЕ построенные (off-main) turns/blocks открытой сессии —
+    /// одно мгновенное присваивание на main-thread, без тяжёлого build.
+    private func applyDialog(_ d: SessionDialog, turns builtTurns: [DialogTurn], blocks builtBlocks: [DialogBlock]) {
         dialog = d
         branchGraph = BranchGraph.build(from: d.messages)
         branchChoice = [:]
-        rebuildTurns()
-        // recomputeMatches (inside rebuildTurns) already scrolled to a match when
-        // searching; otherwise land on the end of the conversation.
+        // Ветвлёная сессия в .switcher/.activeOnly требует фильтра активного
+        // пути (инстансная логика с branchGraph) — там перестраиваем на main
+        // (данные уже в памяти, диск не трогаем). Линейные сессии (почти все,
+        // включая гигантские раны нейробота) берут готовый off-main build.
+        if let g = branchGraph, g.hasBranches, branchMode != .tree {
+            rebuildTurns()
+        } else {
+            turns = builtTurns
+            blocks = builtBlocks   // didSet → rebuildNavCache
+            recomputeMatches()
+        }
         if searchTokens.isEmpty {
             turnIndex = max(0, userTurnIDs.count - 1)
-            // Session just switched: land at the end instantly (no animated
-            // top→bottom travel, which read as a jarring jump).
+            // Session just switched: land at the end instantly.
             if let last = blocks.last?.id { requestScroll(to: last, instant: true) }
         }
+    }
+
+    /// Build вне main для линейной (не ветвлёной) загрузки — raw-порядок
+    /// сообщений. Ветвление обрабатывается на main в `applyDialog`.
+    nonisolated private static func messagesForRenderStatic(_ messages: [DialogMessage], brief: Bool) -> [DialogMessage] {
+        messages
     }
 
     /// Re-derive turns + blocks from the current dialog (e.g. on briefMode /
@@ -1183,12 +1245,17 @@ final class AppModel: ObservableObject {
 
     /// Copy whole sessions; when `since` is set, only blocks at or newer than that
     /// date are kept (a session that ends up empty contributes just its header).
-    func copySessionsToClipboard(_ ids: Set<String>, since: Date? = nil) {
-        // Order by the visible list (search-aware); fall back to allSessions for
-        // any id not currently in hits.
+    /// Resolve a set of ids to metas in the visible list's order (search-aware);
+    /// ids not currently in `hits` are appended from the full session set.
+    private func orderedMetas(_ ids: Set<String>) -> [SessionMeta] {
         var metas = hits.map(\.meta).filter { ids.contains($0.id) }
         let found = Set(metas.map(\.id))
-        metas += allSessions.filter { ids.contains($0.id) && !found.contains($0.id) }
+        metas += (externalSessions + allSessions).filter { ids.contains($0.id) && !found.contains($0.id) }
+        return metas
+    }
+
+    func copySessionsToClipboard(_ ids: Set<String>, since: Date? = nil) {
+        let metas = orderedMetas(ids)
         guard !metas.isEmpty else { return }
         showToast(metas.count == 1 ? "Copying session…" : "Copying \(metas.count) sessions…")
         let toolLimit = copyToolOutputLimit
@@ -1208,6 +1275,63 @@ final class AppModel: ObservableObject {
                 pb.setString(text, forType: .string)
                 self.showToast(metas.count == 1
                                ? "Session copied" : "Sessions copied: \(metas.count)")
+            }
+        }
+    }
+
+    // MARK: - Share by link (the web viewer in web/, deployed on Cloudflare)
+
+    /// Lifecycle of a "Share by Link" upload; non-nil drives the share sheet.
+    enum ShareState {
+        case uploading(done: Int, total: Int)
+        case done(URL)
+        case failed(String)
+    }
+    @Published var shareState: ShareState?
+
+    /// Menu label that reflects how many sessions the share would publish.
+    var shareSessionsLabel: String {
+        let n = copyTargetIDs.count
+        return n > 1 ? "Share \(n) Sessions by Link…" : "Share by Link…"
+    }
+
+    /// Share the current list selection (menu action).
+    func shareSelectedSessions() { shareSessions(copyTargetIDs) }
+
+    /// Upload the given sessions to the share server and surface the /s/<id>
+    /// link in the share sheet. Gzip + upload run off-main; state lands back
+    /// on the main actor.
+    func shareSessions(_ ids: Set<String>) {
+        let metas = orderedMetas(ids)
+        guard !metas.isEmpty else { return }
+        shareState = .uploading(done: 0, total: metas.count)
+        Task.detached(priority: .userInitiated) {
+            do {
+                let url = try await ShareService.share(metas) { done, total in
+                    Task { @MainActor in
+                        if case .uploading = self.shareState {
+                            self.shareState = .uploading(done: done, total: total)
+                        }
+                    }
+                }
+                await MainActor.run { self.shareState = .done(url) }
+            } catch {
+                await MainActor.run { self.shareState = .failed(error.localizedDescription) }
+            }
+        }
+    }
+
+    /// Revoke a share created by this app (owner token from UserDefaults).
+    func deleteShare(_ url: URL) {
+        Task.detached {
+            do {
+                try await ShareService.deleteShare(url: url)
+                await MainActor.run {
+                    self.shareState = nil
+                    self.showToast("Share deleted")
+                }
+            } catch {
+                await MainActor.run { self.shareState = .failed(error.localizedDescription) }
             }
         }
     }
@@ -1238,6 +1362,199 @@ final class AppModel: ObservableObject {
         alert.accessoryView = picker
 
         return alert.runModal() == .alertFirstButtonReturn ? picker.dateValue : nil
+    }
+
+    // MARK: - External sessions (⌘O — a jsonl/gz file anywhere on disk)
+
+    /// Sessions opened explicitly from arbitrary paths (not under
+    /// ~/.claude/projects). Shown at the top of the list, bypassing scope and
+    /// project filters; not persisted across launches.
+    @Published private(set) var externalSessions: [SessionMeta] = []
+
+    /// ⌘O: pick one or more `.jsonl` / `.jsonl.gz` files and open them.
+    func openSessionFileDialog() {
+        let panel = NSOpenPanel()
+        panel.title = "Open Session"
+        panel.message = "Choose Claude Code session files (.jsonl or .jsonl.gz)"
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        var types: [UTType] = []
+        if let t = UTType(filenameExtension: "jsonl") { types.append(t) }
+        types.append(.gzip)
+        panel.allowedContentTypes = types
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls { openSessionFile(url) }
+    }
+
+    /// Open a session file from an arbitrary location. A `.gz` is decompressed
+    /// into the temp dir first; the decompressed copy lives for the app session.
+    func openSessionFile(_ url: URL) {
+        Task.detached(priority: .userInitiated) { [weak self] in
+            var path = url.path
+            if url.pathExtension.lowercased() == "gz" {
+                var name = url.deletingPathExtension().lastPathComponent
+                if !name.hasSuffix(".jsonl") { name += ".jsonl" }
+                let dst = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("SessionExplorer-imported", isDirectory: true)
+                    .appendingPathComponent(name)
+                guard Gzip.decompress(file: path, to: dst) else {
+                    await MainActor.run { self?.showToast("Could not decompress \(url.lastPathComponent)") }
+                    return
+                }
+                path = dst.path
+            }
+            guard let meta = Loader.parseSessionMeta(path) else {
+                await MainActor.run { self?.showToast("Not a session file: \(url.lastPathComponent)") }
+                return
+            }
+            await MainActor.run { self?.addExternalSession(meta) }
+        }
+    }
+
+    private func addExternalSession(_ meta: SessionMeta) {
+        // Already in the scanned library — just select the library row.
+        if allSessions.contains(where: { $0.id == meta.id }) {
+            selectedID = meta.id
+            showToast("Session is already in the library")
+            return
+        }
+        // Re-opening the same external file: refresh the meta and its cached parse.
+        if externalSessions.contains(where: { $0.id == meta.id }) {
+            Loader.invalidateDialog(meta.id)
+        }
+        externalSessions.removeAll { $0.id == meta.id }
+        externalSessions.insert(meta, at: 0)
+        recomputeHits(instant: true)
+        selectedID = meta.id
+        showToast("Opened \(AutoTitle.displayTitle(meta))")
+    }
+
+    // MARK: - Export (PDF / raw .jsonl.gz)
+
+    /// Menu label reflecting how many sessions the export acts on.
+    var exportPDFLabel: String {
+        let n = copyTargetIDs.count
+        return n > 1 ? "Export \(n) Sessions as PDF…" : "Export as PDF…"
+    }
+    var exportRawLabel: String {
+        let n = copyTargetIDs.count
+        return n > 1 ? "Export \(n) Raw Sessions (.jsonl.gz)…" : "Export Raw Session (.jsonl.gz)…"
+    }
+    var exportMarkdownLabel: String {
+        let n = copyTargetIDs.count
+        return n > 1 ? "Export \(n) Sessions as Markdown…" : "Export as Markdown…"
+    }
+
+    /// Turn a session title into a safe file name.
+    private static func exportFileName(_ meta: SessionMeta) -> String {
+        var name = AutoTitle.displayTitle(meta)
+        for c in ["/", ":", "\\", "\n"] { name = name.replacingOccurrences(of: c, with: "-") }
+        name = name.trimmingCharacters(in: .whitespaces)
+        if name.count > 80 { name = String(name.prefix(80)) }
+        return name.isEmpty ? meta.id : name
+    }
+
+    /// Ask for a single-file destination (one session) or a folder (several),
+    /// then hand each meta its target URL. `ext` includes the dot-less suffix.
+    private func askExportDestinations(_ metas: [SessionMeta], ext: String,
+                                       contentType: UTType?,
+                                       fileName: (SessionMeta) -> String)
+        -> [(meta: SessionMeta, url: URL)]? {
+        if metas.count == 1 {
+            let panel = NSSavePanel()
+            if let contentType { panel.allowedContentTypes = [contentType] }
+            panel.allowsOtherFileTypes = true
+            panel.nameFieldStringValue = fileName(metas[0]) + "." + ext
+            panel.canCreateDirectories = true
+            guard panel.runModal() == .OK, let url = panel.url else { return nil }
+            return [(metas[0], url)]
+        }
+        let panel = NSOpenPanel()
+        panel.message = "Choose a folder for the exported sessions"
+        panel.prompt = "Export"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let dir = panel.url else { return nil }
+        return metas.map { ($0, dir.appendingPathComponent(fileName($0) + "." + ext)) }
+    }
+
+    /// Export the selected sessions as styled, paginated PDFs (one file each).
+    func exportSelectedSessionsPDF() {
+        let metas = orderedMetas(copyTargetIDs)
+        guard !metas.isEmpty,
+              let jobs = askExportDestinations(metas, ext: "pdf", contentType: .pdf,
+                                               fileName: Self.exportFileName) else { return }
+        showToast(jobs.count == 1 ? "Exporting PDF…" : "Exporting \(jobs.count) PDFs…")
+        let toolLimit = copyToolOutputLimit
+        Task.detached(priority: .userInitiated) { [weak self] in
+            var ok = 0
+            for job in jobs {
+                // Load + typeset off-main; only the print operation needs main.
+                let d = Loader.loadDialogCached(job.meta)
+                let blocks = Self.blocksForFullCopy(d)
+                let transcript = ExportPDF.attributedTranscript(
+                    meta: job.meta, title: AutoTitle.displayTitle(job.meta),
+                    blocks: blocks, toolOutputLimit: toolLimit,
+                    sessionImages: Loader.loadImages(job.meta.filePath))
+                let done = await MainActor.run { ExportPDF.write(transcript, to: job.url) }
+                if done { ok += 1 }
+            }
+            let n = jobs.count
+            await MainActor.run { [weak self] in
+                self?.showToast(ok == n ? (n == 1 ? "PDF saved" : "PDFs saved: \(n)")
+                                        : "PDF export: \(ok) of \(n) saved")
+            }
+        }
+    }
+
+    /// Export the selected sessions as Markdown files — the same transcript the
+    /// clipboard copy produces (title header + full exchange, tools included),
+    /// written to disk (one .md per session).
+    func exportSelectedSessionsMarkdown() {
+        let metas = orderedMetas(copyTargetIDs)
+        guard !metas.isEmpty,
+              let jobs = askExportDestinations(metas, ext: "md",
+                                               contentType: UTType(filenameExtension: "md"),
+                                               fileName: Self.exportFileName) else { return }
+        showToast(jobs.count == 1 ? "Exporting Markdown…" : "Exporting \(jobs.count) Markdown files…")
+        let toolLimit = copyToolOutputLimit
+        Task.detached(priority: .userInitiated) { [weak self] in
+            var ok = 0
+            for job in jobs {
+                let d = Loader.loadDialogCached(job.meta)
+                let body = Self.plainText(forBlocks: Self.blocksForFullCopy(d),
+                                          toolOutputLimit: toolLimit)
+                let header = "# \(AutoTitle.displayTitle(job.meta))\n\(job.meta.projectLabel) · \(job.meta.id)"
+                let text = body.isEmpty ? header : "\(header)\n\n\(body)"
+                if (try? text.write(to: job.url, atomically: true, encoding: .utf8)) != nil { ok += 1 }
+            }
+            let n = jobs.count
+            await MainActor.run { [weak self] in
+                self?.showToast(ok == n ? (n == 1 ? "Markdown saved" : "Markdown files saved: \(n)")
+                                        : "Markdown export: \(ok) of \(n) saved")
+            }
+        }
+    }
+
+    /// Export the raw jsonl of the selected sessions, gzip-compressed. The file
+    /// keeps the `<sessionId>.jsonl.gz` name so a later ⌘O restores the same id.
+    func exportSelectedSessionsRaw() {
+        let metas = orderedMetas(copyTargetIDs)
+        guard !metas.isEmpty,
+              let jobs = askExportDestinations(metas, ext: "jsonl.gz", contentType: .gzip,
+                                               fileName: { $0.id }) else { return }
+        showToast(jobs.count == 1 ? "Compressing session…" : "Compressing \(jobs.count) sessions…")
+        Task.detached(priority: .userInitiated) { [weak self] in
+            var ok = 0
+            for job in jobs where Gzip.compress(file: job.meta.filePath, to: job.url) { ok += 1 }
+            let n = jobs.count
+            await MainActor.run { [weak self] in
+                self?.showToast(ok == n ? (n == 1 ? "Session exported" : "Sessions exported: \(n)")
+                                        : "Export: \(ok) of \(n) saved")
+            }
+        }
     }
 
     // MARK: - Favorites
@@ -1306,12 +1623,95 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(Array(dismissedAttention), forKey: dismissedKey)
     }
 
+    // MARK: - Edit user prompt (rewrites the record in the jsonl)
+
+    /// The prompt currently open in the edit sheet: record uuid + its raw text.
+    struct PromptEdit: Identifiable {
+        let uuid: String
+        let text: String
+        var id: String { uuid }
+    }
+    @Published var promptEdit: PromptEdit?
+
+    /// Open the edit sheet for the user prompt leading the turn `turnID`.
+    /// The raw stored text (with reminders/attachments markup intact) is read
+    /// back from the jsonl off-thread — the rendered turn body is noise-stripped
+    /// and must not be what gets written back.
+    func beginEditPrompt(turnID: String) {
+        guard let meta = selectedMeta else { return }
+        guard let msg = dialogMessages.first(where: { $0.id == turnID }),
+              msg.role == .user, !msg.uuid.isEmpty else {
+            showToast("This prompt has no uuid — can't edit")
+            return
+        }
+        let path = meta.filePath
+        let uuid = msg.uuid
+        let sessionID = meta.id
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let text = SessionEditor.userText(filePath: path, uuid: uuid)
+            await MainActor.run { [weak self] in
+                guard let self, self.selectedID == sessionID else { return }
+                guard let text else { self.showToast("Record not found in the jsonl"); return }
+                self.promptEdit = PromptEdit(uuid: uuid, text: text)
+            }
+        }
+    }
+
+    /// Write the edited prompt back into the session jsonl, then rebuild the
+    /// open dialog and the cached metadata from scratch — an in-place edit
+    /// breaks the append-only invariant the incremental paths rely on
+    /// (dialogOffset, parsedOffset), so this session must be re-parsed cold.
+    func savePromptEdit(uuid: String, newText: String) {
+        promptEdit = nil
+        guard let meta = selectedMeta else { return }
+        let path = meta.filePath
+        let sessionID = meta.id
+        Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                try SessionEditor.setUserText(filePath: path, uuid: uuid, newText: newText)
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.showToast("Save failed: \(error.localizedDescription)")
+                }
+                return
+            }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                Loader.invalidateDialog(sessionID)
+                if self.selectedID == sessionID {
+                    // Adopt the new mtime up front so the FSEvents-driven sync
+                    // doesn't ALSO fire refreshOpenDialog with the stale
+                    // dialogOffset while the full reload is in flight.
+                    self.openDialogMtime = Loader.fileMtime(path)
+                    self.loadSelectedDialog()
+                }
+                self.showToast("Prompt saved")
+            }
+            await self?.reindexFile(path)
+        }
+    }
+
+    /// Cold re-parse of one session file into the persistent cache. Used after
+    /// an in-place edit: the stored parsedOffset points into the old byte
+    /// layout, so the incremental tail path must not be trusted for this file.
+    nonisolated private func reindexFile(_ path: String) async {
+        guard let meta = Loader.parseSessionMeta(path) else { return }
+        let ctx = ModelContext(store.container)
+        let mtime = Loader.fileMtime(path)
+        let size = Int(Loader.fileLength(path))
+        store.upsert(meta: meta, offset: size, fileMtime: mtime,
+                     schemaVersion: Self.metaSchemaVersion, into: ctx)
+        try? ctx.save()
+        let fresh = store.metas(in: ctx)
+        await MainActor.run { [weak self] in self?.applySynced(fresh) }
+    }
+
     // MARK: - Actions
 
     @Published var toast: String?
     private var toastTask: Task<Void, Never>?
 
-    private func showToast(_ msg: String) {
+    func showToast(_ msg: String) {
         toast = msg
         toastTask?.cancel()
         toastTask = Task { @MainActor in
