@@ -7,8 +7,24 @@ struct AppCommands: Commands {
     @ObservedObject var model: AppModel
 
     var body: some Commands {
-        // Replace the default "New" group with our navigation commands.
-        CommandGroup(replacing: .newItem) {}
+        // File menu: opening a session file from anywhere on disk (.jsonl or
+        // .jsonl.gz), exports, and Finder — the file-level actions.
+        CommandGroup(replacing: .newItem) {
+            Button("Open Session…") { model.openSessionFileDialog() }
+                .keyboardShortcut("o", modifiers: [.command])
+            Divider()
+            Button(model.exportPDFLabel) { model.exportSelectedSessionsPDF() }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+                .disabled(model.selectedMeta == nil)
+            Button(model.exportMarkdownLabel) { model.exportSelectedSessionsMarkdown() }
+                .disabled(model.selectedMeta == nil)
+            Button(model.exportRawLabel) { model.exportSelectedSessionsRaw() }
+                .disabled(model.selectedMeta == nil)
+            Divider()
+            Button("Reveal in Finder") { model.revealInFinder() }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(model.selectedMeta == nil)
+        }
 
         // Search lives in the standard Find menu slot (⌘F).
         CommandGroup(after: .textEditing) {
@@ -35,8 +51,9 @@ struct AppCommands: Commands {
             Button("Copy Sessions since…") { model.copySelectedSessionsSince() }
                 .keyboardShortcut("c", modifiers: [.command, .option])
                 .disabled(model.selectedMeta == nil)
-            Button("Reveal in Finder") { model.revealInFinder() }
-                .keyboardShortcut("r", modifiers: [.command, .shift])
+            Divider()
+            Button(model.shareSessionsLabel) { model.shareSelectedSessions() }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
                 .disabled(model.selectedMeta == nil)
             Divider()
             Button("Hide Session") { if let id = model.selectedID { model.hideSession(id) } }

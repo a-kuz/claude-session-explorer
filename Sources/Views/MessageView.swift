@@ -55,6 +55,7 @@ struct TurnView: View {
 
     @Environment(\.uiScale) private var scale
     @Environment(\.s) private var s
+    @Environment(\.editPrompt) private var editPrompt
 
     private var isUser: Bool { turn.role == .user }
 
@@ -75,7 +76,9 @@ struct TurnView: View {
     /// one line) flowing beneath at body size.
     private var userHeading: some View {
         HStack(alignment: .firstTextBaseline, spacing: s(10)) {
-            Text(turn.bodyText)
+            // Заголовок промпта: обрезаем гигантский текст (срезы контекста
+            // тимлида бывают на сотни КБ) — typesetter иначе вешает main-thread.
+            Text(MessageContent.clampHead(turn.bodyText))
                 .font(.system(size: 15 * scale, weight: .semibold))
                 .foregroundStyle(Color.primary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -93,6 +96,9 @@ struct TurnView: View {
             Rectangle()
                 .fill(isFocused ? Theme.accent : Theme.rule)
                 .frame(width: s(2.5))
+        }
+        .contextMenu {
+            Button("Edit Prompt…") { editPrompt(turn.id) }
         }
     }
 
@@ -235,10 +241,15 @@ struct MarkdownBlockView: View {
                        color: level <= 1 ? .primary : .secondary)
                 .padding(.top, s(6))
         case .paragraph(let text):
-            inlineText(text, size: bodySize, weight: .regular, color: .primary)
-                .lineSpacing(bodyLeading)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
+            if MessageContent.isOversized(text) {
+                OversizedProse(text: text, tokens: tokens, size: bodySize,
+                               weight: .regular, color: .primary, leading: bodyLeading)
+            } else {
+                inlineText(text, size: bodySize, weight: .regular, color: .primary)
+                    .lineSpacing(bodyLeading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
         case .bullet(let depth, let text):
             HStack(alignment: .firstTextBaseline, spacing: s(8)) {
                 Text("•").font(DialogFonts.prose(size: bodySize)).foregroundStyle(Theme.secondaryText)
@@ -296,6 +307,64 @@ struct MarkdownBlockView: View {
                 start = r.upperBound
             }
         }
+    }
+}
+
+/// Огромный prose-блок: по умолчанию рендерим только первые `maxRenderChars`
+/// (typesetter не вешает main-thread), с кнопкой развернуть полностью. Разворот
+/// предупреждает, что отрисовка большого текста может на секунды подвиснуть.
+private struct OversizedProse: View {
+    let text: String
+    let tokens: [String]
+    let size: CGFloat
+    let weight: Font.Weight
+    let color: Color
+    let leading: CGFloat
+
+    @State private var expanded = false
+    @Environment(\.s) private var s
+
+    private var hiddenKB: Int { (text.count - MessageContent.maxRenderChars) / 1024 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: s(8)) {
+            Text(styled(expanded ? text : MessageContent.clampHead(text)))
+                .lineSpacing(leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            if !expanded {
+                Button {
+                    expanded = true
+                } label: {
+                    Label("Показать полностью (~\(hiddenKB) КБ) — может подвиснуть",
+                          systemImage: "arrow.down.circle")
+                        .font(.system(size: size * 0.92, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.accent)
+            }
+        }
+    }
+
+    private func styled(_ t: String) -> AttributedString {
+        var out = Markdown.attributed(
+            t, size: size, weight: weight, color: color,
+            codeColor: .secondary, codeBg: Theme.codeBg, linkColor: Theme.accent)
+        if !tokens.isEmpty {
+            let lower = String(out.characters).lowercased()
+            for token in tokens where !token.isEmpty {
+                var start = lower.startIndex
+                while let r = lower.range(of: token, range: start..<lower.endIndex) {
+                    let lo = lower.distance(from: lower.startIndex, to: r.lowerBound)
+                    let hi = lower.distance(from: lower.startIndex, to: r.upperBound)
+                    let aLo = out.index(out.startIndex, offsetByCharacters: lo)
+                    let aHi = out.index(out.startIndex, offsetByCharacters: hi)
+                    out[aLo..<aHi].backgroundColor = Theme.highlight
+                    start = r.upperBound
+                }
+            }
+        }
+        return out
     }
 }
 

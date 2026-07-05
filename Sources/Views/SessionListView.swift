@@ -59,6 +59,12 @@ struct SessionListView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+              ZStack {
+                // Клик по пустому месту списка снимает выбор и мгновенно
+                // отменяет идущий build/render открытой сессии (loadTask.cancel).
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { model.clearSelection() }
                 List(selection: Binding(
                     get: { model.listSelection },
                     set: { model.updateListSelection($0) }
@@ -105,6 +111,9 @@ struct SessionListView: View {
                         Button("Copy \(ids.count) Sessions since…") {
                             model.copySessionsSincePrompt(ids)
                         }
+                        Button("Share \(ids.count) Sessions by Link…") {
+                            model.shareSessions(ids)
+                        }
                         if ids.allSatisfy(model.isHidden) {
                             Button("Unhide \(ids.count) Sessions") {
                                 ids.forEach(model.unhideSession)
@@ -115,6 +124,7 @@ struct SessionListView: View {
                         rowMenu(meta)
                     }
                 }
+              }
             }
         }
     }
@@ -134,6 +144,7 @@ struct SessionListView: View {
         Divider()
         Button("Copy Session with Content") { model.copySessionsToClipboard([meta.id]) }
         Button("Copy Session since…") { model.copySessionsSincePrompt([meta.id]) }
+        Button("Share by Link…") { model.shareSessions([meta.id]) }
         if model.isHidden(meta.id) {
             Button("Unhide Session") { model.unhideSession(meta.id) }
         } else {

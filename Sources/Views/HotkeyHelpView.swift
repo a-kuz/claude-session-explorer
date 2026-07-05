@@ -29,9 +29,11 @@ struct HotkeyHelpView: View {
             Item(keys: "⌘⇧= / ⌘⇧−", label: "More / less spacing"),
         ]),
         Group(title: "Session", items: [
+            Item(keys: "⌘O", label: "Open session file (.jsonl/.gz)"),
             Item(keys: "⌘↵", label: "Open in Terminal"),
             Item(keys: "⌘⇧C", label: "Copy resume command"),
             Item(keys: "⌘C", label: "Copy session(s) with content"),
+            Item(keys: "⌘⇧P", label: "Export as PDF"),
             Item(keys: "⌘⇧R", label: "Reveal in Finder"),
             Item(keys: "⌘D", label: "Add to favorites"),
             Item(keys: "⌘⌫", label: "Hide session"),

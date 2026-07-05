@@ -67,32 +67,42 @@ private struct DialogSettings: View {
                     Text(mode.label).tag(mode)
                 }
             }
-            CopyOutputLimitField(limit: $model.copyToolOutputLimit)
+            LimitField(toggleLabel: "Limit copied tool output",
+                       fieldLabel: "Max characters per output",
+                       minValue: 1, defaultValue: 2000,
+                       limit: $model.copyToolOutputLimit)
+            LimitField(toggleLabel: "Limit displayed block size",
+                       fieldLabel: "Max characters per block",
+                       minValue: 1000, defaultValue: 40_000,
+                       limit: $model.maxRenderChars)
         }
         .padding(20)
     }
 }
 
-/// Caps how many characters of each tool's output are placed on the clipboard
-/// when copying sessions/blocks. The toggle switches between "full" (0) and a
-/// numeric cap; the last non-zero value is remembered while the toggle is off.
-private struct CopyOutputLimitField: View {
+/// Числовой лимит-с-переключателем: тумблер «вкл/без лимита» (0 = без лимита) +
+/// поле значения. Последнее ненулевое значение помнится, пока тумблер выключен.
+/// Один компонент для всех лимитов настроек — единообразно.
+private struct LimitField: View {
+    let toggleLabel: String
+    let fieldLabel: String
+    let minValue: Int
+    let defaultValue: Int
     @Binding var limit: Int
-
-    @State private var lastNonZero = 2000
+    @State private var lastNonZero: Int?
 
     private var limited: Binding<Bool> {
         Binding(get: { limit > 0 },
-                set: { on in limit = on ? lastNonZero : 0 })
+                set: { on in limit = on ? (lastNonZero ?? defaultValue) : 0 })
     }
 
     var body: some View {
-        Toggle("Limit copied tool output", isOn: limited)
+        Toggle(toggleLabel, isOn: limited)
         if limit > 0 {
-            LabeledContent("Max characters per output") {
+            LabeledContent(fieldLabel) {
                 TextField("", value: Binding(
                     get: { limit },
-                    set: { limit = max(1, $0); lastNonZero = limit }
+                    set: { limit = max(minValue, $0); lastNonZero = limit }
                 ), format: .number)
                 .frame(width: 90)
                 .multilineTextAlignment(.trailing)

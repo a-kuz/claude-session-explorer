@@ -102,6 +102,22 @@ enum MessageContent {
         return s
     }
 
+    /// Лимит символов prose/tool-блока для ОТОБРАЖЕНИЯ. Полотна на 1M+ символов
+    /// вешают CoreText-typesetter на main-thread. Рендер по умолчанию показывает
+    /// первые `maxRenderChars`, остальное — по кнопке «показать полностью».
+    /// Настраивается из AppModel (UI «Лимит символов блока»). 0 = без лимита.
+    nonisolated(unsafe) static var maxRenderChars = 40_000
+
+    /// Текст длиннее лимита? (тогда рендер обрежет и покажет кнопку разворота)
+    static func isOversized(_ t: String) -> Bool {
+        maxRenderChars > 0 && t.count > maxRenderChars
+    }
+    /// Голова текста для отображения (без пометок — её ставит View).
+    static func clampHead(_ t: String) -> String {
+        guard isOversized(t) else { return t }
+        return String(t.prefix(maxRenderChars))
+    }
+
     /// Split a message's content into prose, tool calls, and tool results.
     static func extractContent(_ content: Any?) -> ExtractedContent {
         if let s = content as? String {
