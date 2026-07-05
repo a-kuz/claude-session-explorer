@@ -192,7 +192,9 @@ void main(){
 const P = {
   hf: 1.07, hz: 0.02, n: 4.5, bevel: 0, cut: 0.075,
   cream: "#f6f4ed", terra: "#c65138", spec: 0, amb: 0.4, sat: 1.21, aa: 2,
-  zoom: 0.43, dragYaw: -0.2035, dragPitch: -0.0995,
+  // zoom подобран так, чтобы объект заполнял маленький канвас в тулбаре
+  // (экспортный 0.43 был под фуллскрин)
+  zoom: 1.0, dragYaw: -0.2035, dragPitch: -0.0995,
 };
 
 const ANG12 = [0.2619, 0.7678, 1.0647, 1.6580, 2.1468, 2.5309, 3.1416, 3.7003, 4.2236, 4.8692, 5.4455, 6.1435];
@@ -279,14 +281,19 @@ function hex2rgb(h: string): [number, number, number] {
   ];
 }
 
+// Заменяет текст #brand в тулбаре на анимированную звезду.
+// Если WebGL2/расширений нет — текст остаётся как был.
 export function initBurst(): void {
+  const brand = document.getElementById("brand");
+  if (!brand) return;
   const cv = document.createElement("canvas");
   cv.id = "burst";
+  cv.title = "Session Explorer";
   const gl = cv.getContext("webgl2", { antialias: true, alpha: true, premultipliedAlpha: false });
   if (!gl) return;
   if (!gl.getExtension("EXT_color_buffer_float")) return;
   const extLF = gl.getExtension("OES_texture_float_linear");
-  document.body.appendChild(cv);
+  brand.replaceChildren(cv);
 
   function compile(type: number, src: string): WebGLShader {
     const sh = gl!.createShader(type)!;
@@ -310,7 +317,7 @@ export function initBurst(): void {
     progBake = link(vs, compile(gl.FRAGMENT_SHADER, BAKE_SRC));
     progMain = link(vs, compile(gl.FRAGMENT_SHADER, FRAG_SRC));
   } catch {
-    cv.remove();
+    brand.textContent = "Session Explorer";
     return;
   }
 

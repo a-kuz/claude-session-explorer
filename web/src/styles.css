@@ -180,17 +180,16 @@ button.primary:hover:not(:disabled) { color: #fff; opacity: .9; }
 #btn-back { display: none; }
 #float-nav { display: none; }
 
-/* декоративная 3D-звезда Claude в правом нижнем углу */
+/* 3D-звезда Claude вместо текста в тулбаре */
 #burst {
-  position: fixed; right: 6px; bottom: 4px; width: 112px; height: 112px;
-  z-index: 5; cursor: grab; touch-action: none;
+  display: block; width: 46px; height: 46px; margin: -11px 0;
+  cursor: grab; touch-action: none;
 }
 #burst:active { cursor: grabbing; }
 
 /* ---- mobile: list and dialog are separate screens ---- */
 @media (max-width: 720px) {
   #brand { display: none; }
-  #burst { display: none; }
   #search { max-width: none; flex: 1; width: auto; }
   #toolbar { gap: 7px; padding: 8px 10px; }
   #share-status { display: none; }
