@@ -1,0 +1,15 @@
+{
+  "name": "session-explorer",
+  "main": "worker/index.ts",
+  "compatibility_date": "2025-08-01",
+  "account_id": "cabc60d00de9d3cbc62ed1910bffaad5",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "kv_namespaces": [
+    { "binding": "SHARES", "id": "ad1ed9f1e9b94aafb91a3347c75f25a1" }
+  ]
+}
