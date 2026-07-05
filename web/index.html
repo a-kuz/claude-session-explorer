@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Session Explorer</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔭</text></svg>" />
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="toolbar">
+      <button id="btn-back" type="button" title="Back to sessions">←</button>
+      <span id="brand">Session Explorer</span>
+      <input id="search" type="search" placeholder="Search — words AND, /regex/" autocomplete="off" />
+      <span id="toolbar-spacer"></span>
+      <span id="share-status"></span>
+      <button id="btn-add" type="button">Add .jsonl</button>
+      <button id="btn-share" type="button" disabled>Share selected</button>
+    </header>
+    <div id="banner" hidden></div>
+    <main id="columns">
+      <section id="list-pane">
+        <div id="list"></div>
+        <div id="list-empty" hidden>
+          <p><strong>No sessions yet.</strong></p>
+          <p>Drop <code>.jsonl</code> files here — single sessions or the whole
+            <code>~/.claude/projects</code> folder. Everything is parsed and stored
+            in your browser; nothing is uploaded until you share.</p>
+        </div>
+      </section>
+      <section id="dialog-pane">
+        <div id="dialog"></div>
+      </section>
+      <aside id="outline-pane">
+        <div id="outline"></div>
+      </aside>
+    </main>
+    <div id="float-nav">
+      <button id="nav-outline" type="button" title="Prompts outline">☰</button>
+      <button id="nav-up" type="button" title="Previous prompt">↑</button>
+      <button id="nav-down" type="button" title="Next prompt">↓</button>
+    </div>
+    <div id="dropzone" hidden>Drop .jsonl files or a projects folder</div>
+  </div>
+  <input id="file-input" type="file" multiple accept=".jsonl" hidden />
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

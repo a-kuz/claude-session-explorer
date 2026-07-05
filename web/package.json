@@ -1,0 +1,21 @@
+{
+  "name": "session-explorer-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "deploy": "vite build && wrangler deploy"
+  },
+  "dependencies": {
+    "dompurify": "^3.2.4",
+    "marked": "^15.0.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260705.1",
+    "typescript": "^5.7.3",
+    "vite": "^6.2.0",
+    "wrangler": "^4.0.0"
+  }
+}
