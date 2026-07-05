@@ -27,6 +27,15 @@ list and in the conversation.
 - The list and the open conversation update live as Claude Code writes to disk.
 - Session titles come from `custom-title`, then `ai-title`, otherwise one is
   generated from the first prompt.
+- Export as PDF (⌘⇧P) or Markdown — a styled transcript with prompts, tool
+  calls, and inline images; works on a multi-selection of sessions.
+- Share via link (⌘⇧S): upload a set of sessions to the web viewer and get a
+  persistent public URL; your shares can be deleted later.
+- Edit user prompts in place — hover a prompt and click the pencil (e.g. fix a
+  typo before sharing). The change is written back into the session jsonl.
+- Import / export sessions as files: export the raw jsonl as `.jsonl.gz`, and
+  open any `.jsonl` / `.jsonl.gz` from disk (⌘O) — it shows up pinned at the
+  top of the list, no matter where the file lives.
 
 ## Build
 
@@ -51,6 +60,9 @@ the terminal. On the first "Open in Terminal" allow Automation for your terminal
 | `⌘F` | focus search |
 | `Esc` | clear search |
 | `⌘↩` | open session in terminal |
+| `⌘O` | open a `.jsonl` / `.jsonl.gz` session file |
+| `⌘⇧P` | export as PDF |
+| `⌘⇧S` | share via link |
 | `⌘⇧C` | copy resume command |
 | `⌘E` | brief mode |
 | `⌘B` | show / hide sidebar |
