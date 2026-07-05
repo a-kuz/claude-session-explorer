@@ -3,6 +3,9 @@
   "main": "worker/index.ts",
   "compatibility_date": "2025-08-01",
   "account_id": "cabc60d00de9d3cbc62ed1910bffaad5",
+  "routes": [
+    { "pattern": "claude-sessions.a-kuz.online", "custom_domain": true }
+  ],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

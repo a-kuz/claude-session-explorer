@@ -15,7 +15,7 @@ enum ShareService {
            let url = URL(string: s), !s.isEmpty {
             return url
         }
-        return URL(string: "https://session-explorer.erpprog.workers.dev")!
+        return URL(string: "https://claude-sessions.a-kuz.online")!
     }
 
     struct ShareError: LocalizedError {

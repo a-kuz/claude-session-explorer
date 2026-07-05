@@ -35,7 +35,7 @@ on this machine can later be revoked with `--delete`.
 
 - The share is a snapshot: content appended to the session after sharing is
   NOT visible by the old link; share again for a fresh snapshot (new URL).
-- Server: `https://session-explorer.erpprog.workers.dev` by default; override
+- Server: `https://claude-sessions.a-kuz.online` by default; override
   with the `SESSION_EXPLORER_URL` env var to point at your own deployment
   (the worker source lives in `web/` of this repository).
 - Limits: 24 MB gzipped per session, 100 sessions / 100 MB per share.

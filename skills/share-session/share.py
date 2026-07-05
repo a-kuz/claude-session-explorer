@@ -22,7 +22,7 @@ import sys
 import urllib.error
 import urllib.request
 
-DEFAULT_SERVER = "https://session-explorer.erpprog.workers.dev"
+DEFAULT_SERVER = "https://claude-sessions.a-kuz.online"
 MAX_PART = 24 * 1024 * 1024  # server-side KV value cap, gzipped
 
 
