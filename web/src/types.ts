@@ -4,8 +4,13 @@ export interface ToolUse {
   name: string;
   /// Short single-line summary of the most salient argument.
   arg: string;
+  /// Human-readable label — the tool's `description` input, when present.
+  label: string;
   /// Pretty-printed input, shown when the tool is expanded.
   input: string;
+  /// Structured input object (when the input was an object) — rendered
+  /// field-by-field instead of a raw JSON dump.
+  inputObj: Record<string, unknown> | null;
   /// jsonl tool_use id — links this call to its tool_result.
   toolUseID: string;
   /// Result text of the call (filled by linking tool_result later).

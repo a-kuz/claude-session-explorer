@@ -61,32 +61,77 @@ function clampedPre(text: string): HTMLElement {
   return wrap;
 }
 
-function toolNode(tool: ToolUse): HTMLElement {
-  const box = el("div", "tool");
-  const head = el("div", "tool-head");
-  head.append(el("span", undefined, "▸"), el("span", "tool-name", tool.name));
-  if (tool.arg) head.append(el("span", "tool-arg", tool.arg));
-  box.append(head);
-
-  let body: HTMLElement | null = null;
-  head.addEventListener("click", () => {
-    if (body) {
-      const hidden = body.hidden;
-      body.hidden = !hidden;
-      (head.firstChild as HTMLElement).textContent = hidden ? "▾" : "▸";
-      return;
-    }
-    body = el("div", "tool-body");
+/// Renders a tool's input field-by-field: `description` becomes a caption,
+/// string fields become labeled code blocks, the rest — labeled JSON.
+/// Falls back to one "Input" JSON dump when the input isn't an object.
+function appendInput(body: HTMLElement, tool: ToolUse) {
+  const obj = tool.inputObj;
+  if (!obj) {
     if (tool.input && tool.input !== "{}") {
       body.append(el("h4", undefined, "Input"), clampedPre(tool.input));
     }
+    return;
+  }
+  const desc = obj.description;
+  if (typeof desc === "string" && desc.trim()) {
+    body.append(el("div", "step-desc", desc));
+  }
+  for (const [key, value] of Object.entries(obj)) {
+    if (key === "description") continue;
+    body.append(el("h4", undefined, key));
+    body.append(clampedPre(
+      typeof value === "string" ? value : JSON.stringify(value, null, 2),
+    ));
+  }
+}
+
+/// One tool call as a step row inside a group: ✓ + name + arg; clicking the
+/// row lazily unfolds Input/Result details underneath.
+function stepNode(tool: ToolUse): HTMLElement {
+  const step = el("div", "tool-step");
+  const line = el("div", "step-line");
+  line.append(el("span", "step-ic", "✓"), el("span", "step-name", tool.name));
+  // A human description beats the raw argument when the tool has one.
+  if (tool.label) line.append(el("span", "step-lbl", tool.label));
+  else if (tool.arg) line.append(el("span", "step-arg", tool.arg));
+  step.append(line);
+
+  let body: HTMLElement | null = null;
+  line.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (body) {
+      body.hidden = !body.hidden;
+      return;
+    }
+    body = el("div", "step-body");
+    appendInput(body, tool);
     if (tool.output) {
       body.append(el("h4", undefined, "Result"), clampedPre(tool.output));
     }
     if (!body.childElementCount) body.append(el("h4", undefined, "No details"));
-    box.append(body);
-    (head.firstChild as HTMLElement).textContent = "▾";
+    step.append(body);
   });
+  return step;
+}
+
+/// A run of consecutive tool calls collapsed into one group (v.be style):
+/// the header lists the steps comma-separated (ellipsized) with a count;
+/// clicking it unfolds the step list.
+function toolGroupNode(tools: ToolUse[]): HTMLElement {
+  const box = el("div", "tool-group");
+  const head = el("div", "tg-head");
+  const summary = tools
+    .map((t) => t.label || t.name + (t.arg ? ` ${t.arg}` : ""))
+    .join(", ");
+  head.append(
+    el("span", "tg-chev", "▸"),
+    el("span", "tg-summary", summary),
+    el("span", "tg-count", String(tools.length)),
+  );
+  head.addEventListener("click", () => box.classList.toggle("open"));
+  const list = el("div", "tg-list");
+  for (const t of tools) list.append(stepNode(t));
+  box.append(head, list);
   return box;
 }
 
@@ -180,9 +225,21 @@ export function renderDialog(
         blockNode.append(el("div", "prompt-sentinel"), node);
       } else {
         const node = el("div", "turn-assistant");
+        // Consecutive tool segments render as one collapsed group.
+        let run: ToolUse[] = [];
+        const flushRun = () => {
+          if (run.length) node.append(toolGroupNode(run));
+          run = [];
+        };
         for (const seg of turn.segments) {
-          node.append(seg.kind === "prose" ? proseNode(seg.text) : toolNode(seg.tool));
+          if (seg.kind === "tool") {
+            run.push(seg.tool);
+          } else {
+            flushRun();
+            node.append(proseNode(seg.text));
+          }
         }
+        flushRun();
         if (turn.images.length) node.append(imagesNode(turn.images));
         const t = timeLabel(turn.timestamp);
         if (t) node.append(el("div", "turn-time", t));

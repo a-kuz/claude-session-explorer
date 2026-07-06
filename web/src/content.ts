@@ -66,6 +66,13 @@ function summarizeToolInput(input: unknown): string {
   return "";
 }
 
+/** Human label of a tool call — its `description` input, when present. */
+function toolLabel(input: unknown): string {
+  if (typeof input !== "object" || input === null) return "";
+  const d = (input as Record<string, unknown>).description;
+  return typeof d === "string" ? oneLine(d, 100) : "";
+}
+
 function formatToolInput(input: unknown): string {
   if (input === undefined || input === null) return "";
   try {
@@ -139,7 +146,11 @@ export function extractContent(content: unknown): ExtractedContent {
         const tool: ToolUse = {
           name: typeof b.name === "string" ? b.name : "tool",
           arg: summarizeToolInput(b.input),
+          label: toolLabel(b.input),
           input: formatToolInput(b.input),
+          inputObj: typeof b.input === "object" && b.input !== null && !Array.isArray(b.input)
+            ? (b.input as Record<string, unknown>)
+            : null,
           toolUseID: typeof b.id === "string" ? b.id : "",
           output: "",
         };
