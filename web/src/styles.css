@@ -106,12 +106,28 @@ button.primary:hover:not(:disabled) { color: #fff; opacity: .9; }
 #dialog-placeholder { color: var(--muted); padding: 40px 0; text-align: center; }
 
 .block { margin-bottom: 18px; }
+/* Stacked sticky prompts: each user prompt pins to the top of the dialog pane
+   while its answers scroll by; the next block's prompt pushes it out. The
+   sentinel is a 1px marker above the header — an IntersectionObserver flips
+   `.stuck` when it leaves the pane, since CSS alone can't detect pinning. */
+.prompt-sentinel { height: 1px; }
 .turn-user {
   background: var(--user-bg); border-radius: 10px; padding: 10px 14px;
-  margin: 14px 0 10px; white-space: pre-wrap; overflow-wrap: break-word;
+  margin: 13px 0 10px; white-space: pre-wrap; overflow-wrap: break-word;
   border-left: 3px solid var(--accent);
+  position: sticky; top: 0; z-index: 6;
 }
 .turn-user .turn-time { float: right; }
+.turn-user .prompt-text { white-space: pre-wrap; overflow-wrap: break-word; }
+.turn-user.stuck {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .22);
+  cursor: pointer;
+}
+.turn-user.stuck .prompt-text {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.turn-user.stuck .msg-images { display: none; }
 .turn-assistant { padding: 2px 2px 2px 6px; }
 .turn-time { color: var(--muted); font-size: 11px; }
 
