@@ -108,11 +108,38 @@ function imagesNode(images: string[]): HTMLElement {
   return wrap;
 }
 
+/// Watches the 1px sentinel above each prompt header: once the sentinel
+/// scrolls out of the top of the dialog pane the header is pinned — it gets
+/// `.stuck` (compact two-line form + shadow). One observer per rendered dialog.
+let stuckObserver: IntersectionObserver | null = null;
+
+function observeStickyPrompts(container: HTMLElement) {
+  stuckObserver?.disconnect();
+  const root = container.parentElement;
+  if (!root) return;
+  stuckObserver = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        const header = (e.target as HTMLElement).nextElementSibling;
+        if (!header?.classList.contains("turn-user")) continue;
+        const stuck = !e.isIntersecting
+          && e.boundingClientRect.top < (e.rootBounds?.top ?? 0);
+        header.classList.toggle("stuck", stuck);
+      }
+    },
+    { root, threshold: 0 },
+  );
+  for (const s of container.querySelectorAll(".prompt-sentinel")) {
+    stuckObserver.observe(s);
+  }
+}
+
 export function renderDialog(
   container: HTMLElement,
   entry: SessionEntry | null,
   blocks: DialogBlock[],
 ) {
+  stuckObserver?.disconnect();
   container.replaceChildren();
   if (!entry) {
     const placeholder = el("div", undefined, "Select a session on the left");
@@ -140,9 +167,17 @@ export function renderDialog(
       if (turn.isUserPrompt) {
         const node = el("div", "turn-user");
         node.append(el("span", "turn-time", timeLabel(turn.timestamp)));
-        node.append(document.createTextNode(turn.bodyChunks.join("\n\n")));
+        const text = el("div", "prompt-text", turn.bodyChunks.join("\n\n"));
+        node.append(text);
         if (turn.images.length) node.append(imagesNode(turn.images));
-        blockNode.append(node);
+        // A pinned (stuck) header acts as "back to this prompt": click scrolls
+        // the block to its natural position. Text selection clicks pass through.
+        node.addEventListener("click", () => {
+          if (!node.classList.contains("stuck")) return;
+          if (window.getSelection()?.toString()) return;
+          blockNode.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+        blockNode.append(el("div", "prompt-sentinel"), node);
       } else {
         const node = el("div", "turn-assistant");
         for (const seg of turn.segments) {
@@ -156,6 +191,7 @@ export function renderDialog(
     }
     container.append(blockNode);
   }
+  observeStickyPrompts(container);
 }
 
 export function renderOutline(container: HTMLElement, blocks: DialogBlock[]) {
