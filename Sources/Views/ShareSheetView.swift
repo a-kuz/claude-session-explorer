@@ -41,6 +41,7 @@ struct ShareSheetView: View {
                 HStack {
                     Button("Delete Share", role: .destructive) { model.deleteShare(url) }
                     Spacer()
+                    Button("Open in Browser") { NSWorkspace.shared.open(url) }
                     ShareLink(item: url) { Label("Share…", systemImage: "square.and.arrow.up") }
                     Button("Done") { model.shareState = nil }
                         .keyboardShortcut(.defaultAction)
