@@ -188,8 +188,18 @@ menus/hotkeys (`AppCommands`). `Theme.swift`, `Markdown.swift`, `Format.swift`,
 
 ## Workflow
 
-This is a personal pet project — zero ceremony. After completing a change (built
-successfully), commit and push right away; no need to ask permission.
+This is a personal pet project — zero ceremony. After EVERY completed change:
+build Release, reinstall into /Applications, relaunch, commit and push — all
+without asking permission.
+
+```sh
+xcodebuild -project SessionExplorer.xcodeproj -scheme SessionExplorer -configuration Release build
+BUILT=~/Library/Developer/Xcode/DerivedData/SessionExplorer-*/Build/Products/Release/SessionExplorer.app
+pkill -x SessionExplorer; sleep 1
+rm -rf /Applications/SessionExplorer.app && ditto $BUILT /Applications/SessionExplorer.app
+open /Applications/SessionExplorer.app
+git add <changed files> && git commit && git push
+```
 
 ## Conventions
 
