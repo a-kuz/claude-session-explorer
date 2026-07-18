@@ -450,23 +450,19 @@ enum ExportPDF {
 
     private static func appendImages(_ turn: DialogTurn, sessionImages: [NSImage],
                                      to out: NSMutableAttributedString) {
-        // Session-wide slice for this turn — includes dead image-cache refs
-        // already recovered from their base64 twins by Loader.loadImages.
-        var slice: [NSImage] = []
+        // The session-wide slice is the authority: it covers base64 images AND
+        // cache-file refs in one aligned sequence, with dead refs already
+        // recovered from their base64 twins by Loader.loadImages. File paths are
+        // only a fallback for callers that didn't pass sessionImages.
+        var images: [NSImage] = []
         if turn.imageCount > 0, turn.imageStartIndex >= 0 {
             let end = min(turn.imageStartIndex + turn.imageCount, sessionImages.count)
-            if turn.imageStartIndex < end { slice = Array(sessionImages[turn.imageStartIndex..<end]) }
-        }
-        var images: [NSImage] = []
-        if !turn.imagePaths.isEmpty {
-            let aligned = turn.imagePaths.count == slice.count
-            images = turn.imagePaths.enumerated().compactMap { i, path in
-                if let img = NSImage(contentsOfFile: path) { return img }
-                if aligned, slice[i].size.width > 1 { return slice[i] }
-                return nil
+            if turn.imageStartIndex < end {
+                images = Array(sessionImages[turn.imageStartIndex..<end]).filter { $0.size.width > 1 }
             }
-        } else {
-            images = slice.filter { $0.size.width > 1 }
+        }
+        if images.isEmpty {
+            images = turn.imagePaths.compactMap { NSImage(contentsOfFile: $0) }
         }
         guard !images.isEmpty else {
             if turn.imageCount > 0 {

@@ -169,28 +169,17 @@ struct TurnView: View {
                     }
                 }
             }
-            // Image attachments: load real files from disk, lay them out as a
-            // wrapping row of thumbnails (single one shows larger).
-            if !turn.imagePaths.isEmpty {
-                // The session-wide image array (`images` slice) has already
-                // recovered dead cache-file refs from their base64 twins — hand
-                // it over as an index-aligned fallback for missing files.
-                InlineImages(paths: turn.imagePaths,
-                             fallback: turn.imagePaths.count == images.count ? images : [])
-            } else if turn.imageCount > 0 && images.isEmpty {
-                // Inline base64 images from the jsonl, decoded into `images`.
-            } else if !images.isEmpty {
-                FlowLayout(spacing: s(8)) {
-                    ForEach(Array(images.enumerated()), id: \.offset) { _, img in
-                        if img.size.width > 1 {
-                            Image(nsImage: img).resizable().aspectRatio(contentMode: .fit)
-                                .frame(maxWidth: s(260), maxHeight: s(220))
-                                .clipShape(RoundedRectangle(cornerRadius: s(8)))
-                                .overlay(RoundedRectangle(cornerRadius: s(8))
-                                    .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
-                        }
-                    }
-                }
+            // Image attachments. The session-wide slice (`images`) is the
+            // authority once decoded: it covers base64 images AND cache-file refs
+            // in one aligned sequence, with dead refs already recovered from
+            // their base64 twins (Loader.loadImages). Until it arrives, file
+            // refs render directly from disk for instant display.
+            if !images.isEmpty {
+                ImageTiles(images: images)
+            } else if !turn.imagePaths.isEmpty {
+                InlineImages(paths: turn.imagePaths)
+            } else if turn.imageCount > 0 {
+                // Base64 images still decoding off-thread.
             }
         }
     }
@@ -199,11 +188,48 @@ struct TurnView: View {
 /// Loads image files from disk by path and lays them out as a wrapping row of
 /// thumbnails (a single image renders larger). Decoding happens off the main
 /// thread; missing files are skipped.
+/// A wrapping row of already-decoded images (a single image renders larger).
+/// An invalid slot (an attachment that could not be recovered) shows an
+/// explicit "unavailable" tile so it never disappears silently.
+struct ImageTiles: View {
+    let images: [NSImage]
+    @Environment(\.s) private var s
+
+    private var single: Bool { images.count == 1 }
+
+    var body: some View {
+        FlowLayout(spacing: s(8), lineSpacing: s(8)) {
+            ForEach(Array(images.enumerated()), id: \.offset) { _, img in
+                if img.size.width > 1 {
+                    Image(nsImage: img).resizable().aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: s(single ? 460 : 260), maxHeight: s(single ? 380 : 220))
+                        .clipShape(RoundedRectangle(cornerRadius: s(8)))
+                        .overlay(RoundedRectangle(cornerRadius: s(8))
+                            .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
+                } else {
+                    RoundedRectangle(cornerRadius: s(8))
+                        .fill(Color.primary.opacity(0.04))
+                        .frame(width: s(single ? 200 : 120), height: s(single ? 140 : 90))
+                        .overlay(RoundedRectangle(cornerRadius: s(8))
+                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+                        .overlay {
+                            VStack(spacing: s(5)) {
+                                Image(systemName: "photo.badge.exclamationmark")
+                                    .font(.system(size: 16))
+                                    .foregroundStyle(Theme.tertiaryText)
+                                Text("Image unavailable")
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(Theme.tertiaryText)
+                            }
+                        }
+                }
+            }
+        }
+    }
+}
+
 struct InlineImages: View {
     let paths: [String]
-    /// Index-aligned substitutes for paths whose file is gone (recovered from
-    /// the session's base64 image records). Empty when alignment is unknown.
-    var fallback: [NSImage] = []
     @State private var loaded: [String: NSImage] = [:]
     /// Paths that were attempted and produced no image (deleted screenshots are
     /// common) — shown as an explicit "unavailable" tile, not an eternal spinner.
@@ -215,8 +241,8 @@ struct InlineImages: View {
 
     var body: some View {
         FlowLayout(spacing: s(8), lineSpacing: s(8)) {
-            ForEach(Array(paths.enumerated()), id: \.offset) { idx, path in
-                if let img = resolved(path, idx), img.size.width > 1 {
+            ForEach(paths, id: \.self) { path in
+                if let img = loaded[path], img.size.width > 1 {
                     Image(nsImage: img)
                         .resizable().aspectRatio(contentMode: .fit)
                         .frame(maxWidth: s(maxDim), maxHeight: s(single ? 380 : 200))
@@ -255,16 +281,6 @@ struct InlineImages: View {
                 }
             }
         }
-    }
-
-    /// The image for a slot: the file if it loaded, else the index-aligned
-    /// base64 substitute (a dead image-cache ref recovered from the jsonl).
-    private func resolved(_ path: String, _ idx: Int) -> NSImage? {
-        if let img = loaded[path] { return img }
-        if failed.contains(path), idx < fallback.count, fallback[idx].size.width > 1 {
-            return fallback[idx]
-        }
-        return nil
     }
 
     private static func load(_ path: String) async -> NSImage? {
