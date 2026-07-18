@@ -76,8 +76,7 @@ struct SessionListView: View {
                                 SearchResultRow(hit: hit, tokens: model.searchTokens,
                                                 isSelected: selected)
                                     .tag(hit.meta.id)
-                                    .listRowBackground(selected
-                                        ? RoundedRectangle(cornerRadius: 6).fill(Theme.accent) : nil)
+                                    .listRowBackground(rowBackground(selected))
                             }
                         } header: {
                             HStack {
@@ -96,15 +95,13 @@ struct SessionListView: View {
                                        forkDepth: list.forkDepth[hit.meta.id] ?? 0,
                                        isSelected: selected)
                                 .tag(hit.meta.id)
-                                // Selection is drawn by the row itself (accent +
-                                // white text) so the active row reads the same
-                                // whether or not the list has keyboard focus.
-                                .listRowBackground(selected
-                                    ? RoundedRectangle(cornerRadius: 6).fill(Theme.accent) : nil)
+                                .listRowBackground(rowBackground(selected))
                         }
                     }
                 }
                 .listStyle(.inset)
+                .scrollContentBackground(.hidden)
+                .background(Theme.cardBg)
                 // Tell the model when the user is actively scrolling so live list
                 // reorders wait for idle (no rows jumping under the cursor).
                 .onScrollPhaseChange { _, phase in
@@ -137,6 +134,19 @@ struct SessionListView: View {
                 }
               }
             }
+        }
+    }
+
+    /// Selection is drawn by the row itself (accent + white text from the model's
+    /// `listSelection`), so the active row reads the same with or without list
+    /// focus. The base layer is OPAQUE on every row: NSTableView paints its own
+    /// selection on mouse-down, before the binding round-trips through the model,
+    /// and during coalesced list updates the two can briefly disagree — an opaque
+    /// cover makes the model-driven accent the only selection ever visible.
+    private func rowBackground(_ selected: Bool) -> some View {
+        ZStack {
+            Theme.cardBg
+            if selected { RoundedRectangle(cornerRadius: 6).fill(Theme.accent) }
         }
     }
 
