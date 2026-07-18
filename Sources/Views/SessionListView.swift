@@ -175,6 +175,16 @@ struct SessionRow: View {
     private var snippet: String { meta.lastUserText }
     private var time: String { Format.mailTime(meta.mtime) }
     private var size: String { Format.compactBytes(meta.byteSize) }
+    private var sizeLevel: Int { SizeBars.level(forBytes: meta.byteSize) }
+    /// Size color grading: small sessions stay quiet, heavy ones warn.
+    private var sizeColor: Color {
+        switch sizeLevel {
+        case 1: return Color(nsColor: .quaternaryLabelColor)
+        case 2: return Theme.tertiaryText
+        case 3: return Color(hex: 0xFF9F0A)
+        default: return Color(hex: 0xFF453A)
+        }
+    }
 
     var body: some View {
         // Mail-style row: a left dot column (vertically centred), then a content
@@ -212,10 +222,13 @@ struct SessionRow: View {
                         .foregroundStyle(Theme.secondaryText)
                         .lineLimit(1)
                     Spacer(minLength: 4)
-                    Text(size)
-                        .font(.system(size: 10.5 * scale, weight: .medium, design: .rounded))
-                        .foregroundStyle(Theme.tertiaryText)
-                        .fixedSize()
+                    HStack(alignment: .center, spacing: s(3.5)) {
+                        SizeBars(level: sizeLevel, filled: sizeColor)
+                        Text(size)
+                            .font(.system(size: 10.5 * scale, weight: .medium, design: .rounded))
+                            .foregroundStyle(sizeColor)
+                    }
+                    .fixedSize()
                 }
                 Text(snippet)
                     .font(.system(size: 12.5 * scale))
