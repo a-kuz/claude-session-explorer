@@ -175,15 +175,12 @@ struct SessionRow: View {
     private var snippet: String { meta.lastUserText }
     private var time: String { Format.mailTime(meta.mtime) }
     private var size: String { Format.compactBytes(meta.byteSize) }
-    private var sizeLevel: Int { SizeBars.level(forBytes: meta.byteSize) }
-    /// Size color grading: small sessions stay quiet, heavy ones warn.
+    /// Size grading by color intensity alone: ~10K is barely visible, tens of
+    /// megabytes read almost as strong as the title. Log scale over the size.
     private var sizeColor: Color {
-        switch sizeLevel {
-        case 1: return Color(nsColor: .quaternaryLabelColor)
-        case 2: return Theme.tertiaryText
-        case 3: return Color(hex: 0xFF9F0A)
-        default: return Color(hex: 0xFF453A)
-        }
+        let mb = Double(meta.byteSize) / 1_000_000
+        let t = min(1, max(0, (log10(max(mb, 0.01)) + 2) / 3.5))   // 10K → 0, ~30M → 1
+        return Color.primary.opacity(0.22 + 0.66 * t)
     }
 
     var body: some View {
@@ -222,13 +219,10 @@ struct SessionRow: View {
                         .foregroundStyle(Theme.secondaryText)
                         .lineLimit(1)
                     Spacer(minLength: 4)
-                    HStack(alignment: .center, spacing: s(3.5)) {
-                        SizeBars(level: sizeLevel, filled: sizeColor)
-                        Text(size)
-                            .font(.system(size: 10.5 * scale, weight: .medium, design: .rounded))
-                            .foregroundStyle(sizeColor)
-                    }
-                    .fixedSize()
+                    Text(size)
+                        .font(.system(size: 10.5 * scale, weight: .medium, design: .rounded))
+                        .foregroundStyle(sizeColor)
+                        .fixedSize()
                 }
                 Text(snippet)
                     .font(.system(size: 12.5 * scale))
