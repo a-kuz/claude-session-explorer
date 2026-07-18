@@ -172,7 +172,11 @@ struct TurnView: View {
             // Image attachments: load real files from disk, lay them out as a
             // wrapping row of thumbnails (single one shows larger).
             if !turn.imagePaths.isEmpty {
-                InlineImages(paths: turn.imagePaths)
+                // The session-wide image array (`images` slice) has already
+                // recovered dead cache-file refs from their base64 twins — hand
+                // it over as an index-aligned fallback for missing files.
+                InlineImages(paths: turn.imagePaths,
+                             fallback: turn.imagePaths.count == images.count ? images : [])
             } else if turn.imageCount > 0 && images.isEmpty {
                 // Inline base64 images from the jsonl, decoded into `images`.
             } else if !images.isEmpty {
@@ -197,6 +201,9 @@ struct TurnView: View {
 /// thread; missing files are skipped.
 struct InlineImages: View {
     let paths: [String]
+    /// Index-aligned substitutes for paths whose file is gone (recovered from
+    /// the session's base64 image records). Empty when alignment is unknown.
+    var fallback: [NSImage] = []
     @State private var loaded: [String: NSImage] = [:]
     /// Paths that were attempted and produced no image (deleted screenshots are
     /// common) — shown as an explicit "unavailable" tile, not an eternal spinner.
@@ -208,8 +215,8 @@ struct InlineImages: View {
 
     var body: some View {
         FlowLayout(spacing: s(8), lineSpacing: s(8)) {
-            ForEach(paths, id: \.self) { path in
-                if let img = loaded[path], img.size.width > 1 {
+            ForEach(Array(paths.enumerated()), id: \.offset) { idx, path in
+                if let img = resolved(path, idx), img.size.width > 1 {
                     Image(nsImage: img)
                         .resizable().aspectRatio(contentMode: .fit)
                         .frame(maxWidth: s(maxDim), maxHeight: s(single ? 380 : 200))
@@ -248,6 +255,16 @@ struct InlineImages: View {
                 }
             }
         }
+    }
+
+    /// The image for a slot: the file if it loaded, else the index-aligned
+    /// base64 substitute (a dead image-cache ref recovered from the jsonl).
+    private func resolved(_ path: String, _ idx: Int) -> NSImage? {
+        if let img = loaded[path] { return img }
+        if failed.contains(path), idx < fallback.count, fallback[idx].size.width > 1 {
+            return fallback[idx]
+        }
+        return nil
     }
 
     private static func load(_ path: String) async -> NSImage? {
