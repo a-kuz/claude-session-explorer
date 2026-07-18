@@ -411,11 +411,25 @@ enum Loader {
     /// Lazily load all inline images from a session, in the SAME order that
     /// `extractContent` counts them, so per-turn slicing by index stays aligned.
     /// Two kinds: base64 `image` blocks, and `[Image: source: /path]` refs inside
-    /// text blocks (files under ~/.claude/image-cache). Missing files are skipped
-    /// — to keep indices aligned we still emit a placeholder NSImage.
+    /// text blocks (files under ~/.claude/image-cache). A pasted image is written
+    /// BOTH ways: a base64 record first, then the numbered cache-file ref in the
+    /// prompt — and the CLI eventually cleans image-cache, killing the file while
+    /// the base64 twin stays in the jsonl. So a missing ref `<k>.png` falls back
+    /// to the k-th base64 image of the session; only if that fails too do we emit
+    /// a placeholder NSImage (indices must stay aligned).
     static func loadImages(_ filePath: String) -> [NSImage] {
         guard let content = try? String(contentsOfFile: filePath, encoding: .utf8) else { return [] }
         var images: [NSImage] = []
+        var base64Seen: [NSImage] = []   // standalone base64 images, in file order
+
+        func loadRef(_ path: String) -> NSImage {
+            if let img = NSImage(contentsOfFile: path) { return img }
+            // "<k>.png" → the k-th pasted image → the k-th base64 twin.
+            let stem = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+            if let k = Int(stem), k >= 1, k <= base64Seen.count { return base64Seen[k - 1] }
+            return NSImage()
+        }
+
         content.enumerateLines { line, _ in
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard trimmed.contains("\"image\"") || trimmed.contains("Image: source:"),
@@ -428,13 +442,14 @@ enum Loader {
                     case "text":
                         if let t = b["text"] as? String {
                             for path in MessageContent.imageFileRefs(in: t) {
-                                images.append(NSImage(contentsOfFile: path) ?? NSImage())
+                                images.append(loadRef(path))
                             }
                         }
                     case "image":
                         if let src = b["source"] as? [String: Any], let b64 = src["data"] as? String,
                            let data = Data(base64Encoded: b64), let img = NSImage(data: data) {
                             images.append(img)
+                            base64Seen.append(img)
                         } else {
                             images.append(NSImage())
                         }
@@ -442,7 +457,7 @@ enum Loader {
                     }
                 } else if let s = block as? String {
                     for path in MessageContent.imageFileRefs(in: s) {
-                        images.append(NSImage(contentsOfFile: path) ?? NSImage())
+                        images.append(loadRef(path))
                     }
                 }
             }
