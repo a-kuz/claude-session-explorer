@@ -30,18 +30,19 @@ enum Format {
     }
 
     /// List timestamp in the mail style: today → time ("11:30"), yesterday →
-    /// "Yesterday", older → short numeric date.
+    /// "Yesterday", this year → "15 Jul", older → "15 Jul 25". The word-month
+    /// form matches the "Yesterday" register; a full numeric date ("15.07.2026")
+    /// next to it read as two different systems.
     static func mailTime(_ date: Date, now: Date = Date()) -> String {
         let cal = Calendar.current
         if cal.isDate(date, inSameDayAs: now) { return timeOnly(date) }
         if cal.isDateInYesterday(date) {
             return RelativeDateTimeFormatter.named.localizedString(from: DateComponents(day: -1))
         }
-        let f = DateFormatter()
-        f.locale = .current
-        f.dateStyle = .short
-        f.timeStyle = .none
-        return f.string(from: date)
+        if cal.isDate(date, equalTo: now, toGranularity: .year) {
+            return dateFormatted(date, format: "d MMM")
+        }
+        return dateFormatted(date, format: "d MMM yy")
     }
 
     /// Time only, e.g. "14:25" / "2:25 PM" depending on locale.

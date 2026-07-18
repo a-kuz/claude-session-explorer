@@ -2,6 +2,9 @@ import SwiftUI
 
 struct SidebarView: View {
     @EnvironmentObject var model: AppModel
+    /// Select-all / clear-all live in the PROJECTS header but only show while
+    /// the cursor is over it — two tiny cryptic glyphs otherwise add noise.
+    @State private var projectsHeaderHovered = false
 
     var body: some View {
         List {
@@ -29,11 +32,15 @@ struct SidebarView: View {
                         Image(systemName: "checklist.checked")
                     }
                     .buttonStyle(.borderless).help("Select all")
+                    .opacity(projectsHeaderHovered ? 1 : 0)
                     Button { model.clearProjects() } label: {
                         Image(systemName: "checklist.unchecked")
                     }
                     .buttonStyle(.borderless).help("Clear all")
+                    .opacity(projectsHeaderHovered ? 1 : 0)
                 }
+                .contentShape(Rectangle())
+                .onHover { projectsHeaderHovered = $0 }
             }
 
             Section("PERIOD") {
@@ -109,20 +116,41 @@ struct SidebarView: View {
         .onTapGesture { model.setScope(s) }
     }
 
-    // A project row with a native checkbox (multi-select).
     private func projectRow(_ p: ProjectInfo) -> some View {
-        Toggle(isOn: Binding(
-            get: { model.isProjectSelected(p.path) },
-            set: { _ in model.toggleProject(p.path) }
-        )) {
+        ProjectRow(project: p)
+    }
+}
+
+/// A project row (multi-select). The native checkbox shows only while checked
+/// or hovered — an empty square on every row is constant noise for a rare
+/// action. Clicking anywhere on the row still toggles it.
+private struct ProjectRow: View {
+    let project: ProjectInfo
+    @EnvironmentObject var model: AppModel
+    @State private var hovering = false
+
+    var body: some View {
+        let checked = model.isProjectSelected(project.path)
+        HStack(spacing: 8) {
+            Toggle("", isOn: Binding(
+                get: { checked },
+                set: { _ in model.toggleProject(project.path) }
+            ))
+            .toggleStyle(.checkbox)
+            .labelsHidden()
+            .opacity(checked || hovering ? 1 : 0)
+            // The rest of the row toggles too, but stays outside the Toggle so
+            // a click on the checkbox itself doesn't fire twice.
             HStack(spacing: 8) {
                 RoundedRectangle(cornerRadius: 3)
-                    .fill(Theme.dotColor(for: p.path)).frame(width: 9, height: 9)
-                Text(p.label).lineLimit(1)
+                    .fill(Theme.dotColor(for: project.path)).frame(width: 9, height: 9)
+                Text(project.label).lineLimit(1)
                 Spacer()
-                Text("\(p.count)").foregroundStyle(.tertiary).font(.callout)
+                Text("\(project.count)").foregroundStyle(.tertiary).font(.callout)
             }
+            .contentShape(Rectangle())
+            .onTapGesture { model.toggleProject(project.path) }
         }
-        .toggleStyle(.checkbox)
+        .onHover { hovering = $0 }
     }
 }

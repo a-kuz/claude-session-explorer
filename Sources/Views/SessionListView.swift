@@ -72,8 +72,12 @@ struct SessionListView: View {
                     if isSearching {
                         Section {
                             ForEach(model.hits) { hit in
-                                SearchResultRow(hit: hit, tokens: model.searchTokens)
+                                let selected = model.listSelection.contains(hit.meta.id)
+                                SearchResultRow(hit: hit, tokens: model.searchTokens,
+                                                isSelected: selected)
                                     .tag(hit.meta.id)
+                                    .listRowBackground(selected
+                                        ? RoundedRectangle(cornerRadius: 6).fill(Theme.accent) : nil)
                             }
                         } header: {
                             HStack {
@@ -85,11 +89,18 @@ struct SessionListView: View {
                     } else {
                         let list = ordered
                         ForEach(list.hits) { hit in
+                            let selected = model.listSelection.contains(hit.meta.id)
                             SessionRow(meta: hit.meta,
                                        isFavorite: model.isFavorite(hit.meta.id),
                                        needsAttention: model.needsAttention(hit.meta),
-                                       forkDepth: list.forkDepth[hit.meta.id] ?? 0)
+                                       forkDepth: list.forkDepth[hit.meta.id] ?? 0,
+                                       isSelected: selected)
                                 .tag(hit.meta.id)
+                                // Selection is drawn by the row itself (accent +
+                                // white text) so the active row reads the same
+                                // whether or not the list has keyboard focus.
+                                .listRowBackground(selected
+                                    ? RoundedRectangle(cornerRadius: 6).fill(Theme.accent) : nil)
                         }
                     }
                 }
@@ -162,6 +173,9 @@ struct SessionRow: View {
     /// Nesting level under the parent session (0 = a root, 1 = a fork, 2 = a fork
     /// of a fork, …). Forks render indented by depth + italic.
     var forkDepth: Int = 0
+    /// The row draws its own selection (accent row background from the list),
+    /// so all text tiers switch to white variants.
+    var isSelected: Bool = false
     private var isFork: Bool { forkDepth > 0 }
 
     @Environment(\.uiScale) private var scale
@@ -180,7 +194,20 @@ struct SessionRow: View {
     private var sizeColor: Color {
         let mb = Double(meta.byteSize) / 1_000_000
         let t = min(1, max(0, (log10(max(mb, 0.01)) + 2) / 3.5))   // 10K → 0, ~30M → 1
+        if isSelected { return Color.white.opacity(0.55 + 0.45 * t) }
         return Color.primary.opacity(0.22 + 0.66 * t)
+    }
+
+    // Text tiers, switched to white variants on the accent selection background.
+    private var titleColor: Color { isSelected ? .white : .primary }
+    private var secondary: Color { isSelected ? Color.white.opacity(0.8) : Theme.secondaryText }
+    private var tertiary: Color { isSelected ? Color.white.opacity(0.65) : Theme.tertiaryText }
+
+    /// Trivial sessions ("Hi" / "hi") end up with a snippet that just repeats
+    /// the title — showing both looks broken.
+    private var snippetDuplicatesTitle: Bool {
+        snippet.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            == title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     var body: some View {
@@ -188,7 +215,7 @@ struct SessionRow: View {
         // column — bold title + time on top, muted project, muted snippet below.
         HStack(alignment: .top, spacing: s(8)) {
             Circle()
-                .fill(needsAttention ? Theme.accent : Color.clear)
+                .fill(needsAttention ? (isSelected ? Color.white : Theme.accent) : Color.clear)
                 .frame(width: s(8), height: s(8))
                 .padding(.top, s(5))
             VStack(alignment: .leading, spacing: s(2)) {
@@ -196,12 +223,14 @@ struct SessionRow: View {
                     if isFork {
                         Image(systemName: "arrow.turn.down.right")
                             .font(.system(size: 11 * scale))
-                            .foregroundStyle(Theme.accent.opacity(0.7))
+                            .foregroundStyle(isSelected ? Color.white.opacity(0.8)
+                                                        : Theme.accent.opacity(0.7))
                     }
                     Text(title)
                         .font(.system(size: 14 * scale, weight: .bold))
                         .italic(isFork)
                         .lineLimit(1)
+                        .foregroundStyle(titleColor)
                     if isFavorite {
                         Image(systemName: "star.fill")
                             .font(.system(size: 9 * scale))
@@ -210,28 +239,38 @@ struct SessionRow: View {
                     Spacer(minLength: 4)
                     Text(time)
                         .font(.system(size: 11.5 * scale))
-                        .foregroundStyle(Theme.secondaryText)
+                        .foregroundStyle(secondary)
                         .fixedSize()
                 }
                 HStack(alignment: .firstTextBaseline, spacing: s(6)) {
                     Text(project)
                         .font(.system(size: 12.5 * scale))
-                        .foregroundStyle(Theme.secondaryText)
+                        .foregroundStyle(secondary)
                         .lineLimit(1)
                     Spacer(minLength: 4)
+                    // A faint capsule keeps the size from reading as a date —
+                    // both sit in the same right-aligned column.
                     Text(size)
                         .font(.system(size: 10.5 * scale, weight: .medium, design: .rounded))
                         .foregroundStyle(sizeColor)
                         .fixedSize()
+                        .padding(.horizontal, s(5)).padding(.vertical, s(0.5))
+                        .background(isSelected ? Color.white.opacity(0.16)
+                                               : Color.primary.opacity(0.05),
+                                    in: Capsule())
                 }
-                Text(snippet)
-                    .font(.system(size: 12.5 * scale))
-                    .foregroundStyle(Theme.tertiaryText)
-                    .lineLimit(2)
+                if !snippet.isEmpty && !snippetDuplicatesTitle {
+                    Text(snippet)
+                        .font(.system(size: 12.5 * scale))
+                        .foregroundStyle(tertiary)
+                        .lineLimit(2)
+                }
             }
         }
         .padding(.vertical, s(4))
         .padding(.leading, s(18) * CGFloat(forkDepth))
+        // Separator starts at the text column (past the attention-dot gutter).
+        .alignmentGuide(.listRowSeparatorLeading) { _ in s(16) }
     }
 }
 
@@ -272,6 +311,7 @@ struct SizeBars: View {
 struct SearchResultRow: View {
     let hit: SearchHit
     let tokens: [String]
+    var isSelected: Bool = false
     @Environment(\.uiScale) private var scale
     @Environment(\.s) private var s
 
@@ -279,14 +319,19 @@ struct SearchResultRow: View {
         VStack(alignment: .leading, spacing: s(5)) {
             Text(highlighted)
                 .font(.system(size: 12.5 * scale)).lineLimit(2)
+                .foregroundStyle(isSelected ? Color.white : Color.primary)
             HStack(spacing: s(6)) {
                 RoundedRectangle(cornerRadius: s(2))
                     .fill(Theme.dotColor(for: hit.meta.projectPath)).frame(width: s(7), height: s(7))
                 Text("\(hit.meta.projectLabel) · \(AutoTitle.displayTitle(hit.meta))")
-                    .font(.system(size: 11.5 * scale)).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.system(size: 11.5 * scale))
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.8) : Color.secondary)
+                    .lineLimit(1)
                 Spacer(minLength: 4)
                 Text(Format.relativeTime(hit.meta.mtime))
-                    .font(.system(size: 11 * scale)).foregroundStyle(.tertiary)
+                    .font(.system(size: 11 * scale))
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.65)
+                                                : Color(nsColor: .tertiaryLabelColor))
             }
         }
         .padding(.vertical, s(3))
