@@ -198,6 +198,9 @@ struct TurnView: View {
 struct InlineImages: View {
     let paths: [String]
     @State private var loaded: [String: NSImage] = [:]
+    /// Paths that were attempted and produced no image (deleted screenshots are
+    /// common) — shown as an explicit "unavailable" tile, not an eternal spinner.
+    @State private var failed: Set<String> = []
     @Environment(\.s) private var s
 
     private var single: Bool { paths.count == 1 }
@@ -215,16 +218,33 @@ struct InlineImages: View {
                             .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
                 } else {
                     RoundedRectangle(cornerRadius: s(8))
-                        .fill(Color.primary.opacity(0.05))
+                        .fill(Color.primary.opacity(0.04))
                         .frame(width: s(single ? 200 : 120), height: s(single ? 140 : 90))
-                        .overlay(Image(systemName: "photo").foregroundStyle(Theme.tertiaryText))
+                        .overlay(RoundedRectangle(cornerRadius: s(8))
+                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+                        .overlay {
+                            if failed.contains(path) {
+                                VStack(spacing: s(5)) {
+                                    Image(systemName: "photo.badge.exclamationmark")
+                                        .font(.system(size: 16))
+                                        .foregroundStyle(Theme.tertiaryText)
+                                    Text("Image unavailable")
+                                        .font(.system(size: 10.5))
+                                        .foregroundStyle(Theme.tertiaryText)
+                                }
+                            } else {
+                                ProgressView().controlSize(.small)
+                            }
+                        }
                 }
             }
         }
         .task(id: paths) {
-            for p in paths where loaded[p] == nil {
+            for p in paths where loaded[p] == nil && !failed.contains(p) {
                 if let img = await Self.load(p) {
                     await MainActor.run { loaded[p] = img }
+                } else {
+                    await MainActor.run { _ = failed.insert(p) }
                 }
             }
         }
