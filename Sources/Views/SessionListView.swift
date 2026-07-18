@@ -174,6 +174,7 @@ struct SessionRow: View {
     private var project: String { meta.projectLabel }
     private var snippet: String { meta.lastUserText }
     private var time: String { Format.mailTime(meta.mtime) }
+    private var size: String { Format.compactBytes(meta.byteSize) }
 
     var body: some View {
         // Mail-style row: a left dot column (vertically centred), then a content
@@ -205,10 +206,17 @@ struct SessionRow: View {
                         .foregroundStyle(Theme.secondaryText)
                         .fixedSize()
                 }
-                Text(project)
-                    .font(.system(size: 12.5 * scale))
-                    .foregroundStyle(Theme.secondaryText)
-                    .lineLimit(1)
+                HStack(alignment: .firstTextBaseline, spacing: s(6)) {
+                    Text(project)
+                        .font(.system(size: 12.5 * scale))
+                        .foregroundStyle(Theme.secondaryText)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(size)
+                        .font(.system(size: 10.5 * scale, weight: .medium, design: .rounded))
+                        .foregroundStyle(Theme.tertiaryText)
+                        .fixedSize()
+                }
                 Text(snippet)
                     .font(.system(size: 12.5 * scale))
                     .foregroundStyle(Theme.tertiaryText)

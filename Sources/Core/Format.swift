@@ -108,6 +108,18 @@ enum Format {
         ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
     }
 
+    /// Very coarse size for the session list: "110K", "1.8M", "23M".
+    /// Decimal units; megabytes get one decimal below 10, none above.
+    static func compactBytes(_ bytes: Int) -> String {
+        let m = Double(bytes) / 1_000_000
+        if m >= 10 { return "\(Int(m.rounded()))M" }
+        if m >= 1 {
+            let s = String(format: "%.1f", m)
+            return (s.hasSuffix(".0") ? String(s.dropLast(2)) : s) + "M"
+        }
+        return "\(max(1, Int((Double(bytes) / 1_000).rounded())))K"
+    }
+
     /// Message count with English pluralization, e.g. "1 message" / "5 messages".
     static func messagesWord(_ n: Int) -> String {
         "\(n) " + (n == 1 ? "message" : "messages")
