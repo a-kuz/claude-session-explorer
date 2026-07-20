@@ -65,13 +65,31 @@ struct TurnView: View {
         if isUser {
             // A user prompt renders as a section heading: an accent/grey rule down
             // the left, the prompt text at 15/600, the time to the right — no
-            // avatar, no "You". (Matches the design mock.)
-            userHeading
+            // avatar, no "You". (Matches the design mock.) Pasted images hang
+            // beneath the heading.
+            VStack(alignment: .leading, spacing: s(8)) {
+                userHeading
+                attachmentImages
+            }
         } else {
             // Claude's reply: just the prose, flush under the prompt above it.
             turnBody
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// Attached images for this turn. The session-wide slice (`images`) is the
+    /// authority once decoded: it covers base64 images AND cache-file refs in one
+    /// aligned sequence, with dead refs already recovered from their base64 twins
+    /// (Loader.loadImages). Until it arrives, file refs render directly from disk.
+    @ViewBuilder
+    private var attachmentImages: some View {
+        if !images.isEmpty {
+            ImageTiles(images: images)
+        } else if !turn.imagePaths.isEmpty {
+            InlineImages(paths: turn.imagePaths)
+        }
+        // turn.imageCount > 0 with nothing yet: base64 still decoding off-thread.
     }
 
     /// User prompt as a left-ruled heading row, with the body (if any longer than
@@ -169,18 +187,7 @@ struct TurnView: View {
                     }
                 }
             }
-            // Image attachments. The session-wide slice (`images`) is the
-            // authority once decoded: it covers base64 images AND cache-file refs
-            // in one aligned sequence, with dead refs already recovered from
-            // their base64 twins (Loader.loadImages). Until it arrives, file
-            // refs render directly from disk for instant display.
-            if !images.isEmpty {
-                ImageTiles(images: images)
-            } else if !turn.imagePaths.isEmpty {
-                InlineImages(paths: turn.imagePaths)
-            } else if turn.imageCount > 0 {
-                // Base64 images still decoding off-thread.
-            }
+            attachmentImages
         }
     }
 }
