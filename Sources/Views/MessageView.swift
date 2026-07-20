@@ -6,12 +6,14 @@ enum SegmentGroup: Identifiable {
     case prose(id: String, blocks: [MarkdownBlock])
     case tools(id: String, [ToolUse])
     case ask(ToolUse)
+    case image(ToolUse)
 
     var id: String {
         switch self {
         case .prose(let id, _): return id
         case .tools(let id, _): return id
         case .ask(let t): return "ask-\(t.id.uuidString)"
+        case .image(let t): return "img-\(t.id.uuidString)"
         }
     }
 }
@@ -150,6 +152,9 @@ struct TurnView: View {
                 // AskUserQuestion is always its own rich card, never merged.
                 if t.name == "AskUserQuestion" {
                     out.append(.ask(t))
+                } else if t.imageFilePath != nil {
+                    // A Read of an image renders inline, never folded into a chip.
+                    out.append(.image(t))
                 } else if case .tools(let id, var arr)? = out.last {
                     arr.append(t); out[out.count - 1] = .tools(id: id, arr)
                 } else {
@@ -184,6 +189,8 @@ struct TurnView: View {
                         }
                     case .ask(let tool):
                         AskUserQuestionCard(tool: tool, selectedAnswer: nextPrompt)
+                    case .image(let tool):
+                        ReadImageTile(tool: tool)
                     }
                 }
             }
@@ -329,6 +336,51 @@ struct LightboxThumb: View {
             .onHover { hovering = $0; if $0 { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
             .onTapGesture(perform: open)
             .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// A `Read` of an image file: the picture rendered inline (clickable → viewer),
+/// with the read path as a caption. If the file can't be decoded (moved/deleted),
+/// it falls back to the plain tool chip so nothing silently vanishes.
+struct ReadImageTile: View {
+    let tool: ToolUse
+    @State private var image: NSImage?
+    @State private var failed = false
+    @Environment(\.s) private var s
+    @Environment(\.openLightbox) private var openLightbox
+
+    private var path: String { tool.imageFilePath ?? "" }
+
+    var body: some View {
+        Group {
+            if let image {
+                VStack(alignment: .leading, spacing: s(4)) {
+                    LightboxThumb(image: image, maxW: s(300), maxH: s(240)) {
+                        openLightbox([image], 0)
+                    }
+                    Text((path as NSString).lastPathComponent)
+                        .font(.system(size: 10.5)).foregroundStyle(Theme.tertiaryText)
+                }
+            } else if failed {
+                ToolChip(tool: tool)
+            } else {
+                Color.clear.frame(width: 1, height: 1)
+            }
+        }
+        .task(id: path) {
+            if let img = await Self.load(path) {
+                await MainActor.run { image = img }
+            } else {
+                await MainActor.run { failed = true }
+            }
+        }
+    }
+
+    private static func load(_ path: String) async -> NSImage? {
+        await Task.detached(priority: .utility) {
+            guard let img = NSImage(contentsOfFile: path), img.size.width > 1 else { return nil }
+            return img
+        }.value
     }
 }
 

@@ -57,6 +57,22 @@ enum MessageContent {
         "prompt", "description", "old_string",
     ]
 
+    /// File extensions NSImage can decode from disk — used to spot a `Read` of an
+    /// image so the transcript can render it inline. SVG stays out: NSImage can't
+    /// reliably decode it from a file, and a broken tile is worse than a chip.
+    private static let imageExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif", "heic", "heif",
+    ]
+
+    /// Absolute path of the image a `Read` call targets, or nil if this isn't a
+    /// Read of an image file. The path is taken verbatim (loaded lazily on render).
+    private static func imageReadPath(name: String, input: Any?) -> String? {
+        guard name == "Read", let obj = input as? [String: Any],
+              let path = (obj["file_path"] as? String) ?? (obj["path"] as? String) else { return nil }
+        let ext = (path as NSString).pathExtension.lowercased()
+        return imageExtensions.contains(ext) ? path : nil
+    }
+
     private static func summarizeToolInput(_ input: Any?) -> String {
         guard let obj = input as? [String: Any] else { return "" }
         for k in argKeys {
@@ -167,12 +183,14 @@ enum MessageContent {
             case "document":
                 bodyParts.append("[document]"); pushText("[document]")
             case "tool_use":
+                let name = (b["name"] as? String) ?? "tool"
                 let tool = ToolUse(
-                    name: (b["name"] as? String) ?? "tool",
+                    name: name,
                     arg: summarizeToolInput(b["input"]),
                     input: formatToolInput(b["input"]),
                     rawInputJSON: inputJSON(b["input"]),
-                    toolUseID: (b["id"] as? String) ?? ""
+                    toolUseID: (b["id"] as? String) ?? "",
+                    imageFilePath: imageReadPath(name: name, input: b["input"])
                 )
                 toolUses.append(tool)
                 pieces.append(.tool(tool))
