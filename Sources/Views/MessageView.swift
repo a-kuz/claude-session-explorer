@@ -201,18 +201,23 @@ struct TurnView: View {
 struct ImageTiles: View {
     let images: [NSImage]
     @Environment(\.s) private var s
+    @Environment(\.openLightbox) private var openLightbox
 
     private var single: Bool { images.count == 1 }
+    /// Only the decodable tiles feed the viewer, so a click maps to the right one.
+    private var viewable: [NSImage] { images.filter { $0.size.width > 1 } }
 
     var body: some View {
         FlowLayout(spacing: s(8), lineSpacing: s(8)) {
             ForEach(Array(images.enumerated()), id: \.offset) { _, img in
                 if img.size.width > 1 {
-                    Image(nsImage: img).resizable().aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: s(single ? 460 : 260), maxHeight: s(single ? 380 : 220))
-                        .clipShape(RoundedRectangle(cornerRadius: s(8)))
-                        .overlay(RoundedRectangle(cornerRadius: s(8))
-                            .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
+                    LightboxThumb(image: img,
+                                  maxW: s(single ? 300 : 170),
+                                  maxH: s(single ? 240 : 140)) {
+                        if let i = viewable.firstIndex(where: { $0 === img }) {
+                            openLightbox(viewable, i)
+                        }
+                    }
                 } else {
                     RoundedRectangle(cornerRadius: s(8))
                         .fill(Color.primary.opacity(0.04))
@@ -242,20 +247,24 @@ struct InlineImages: View {
     /// common) — shown as an explicit "unavailable" tile, not an eternal spinner.
     @State private var failed: Set<String> = []
     @Environment(\.s) private var s
+    @Environment(\.openLightbox) private var openLightbox
 
     private var single: Bool { paths.count == 1 }
-    private var maxDim: CGFloat { single ? 460 : 200 }
+
+    /// Loaded, decodable images in path order — the viewer's set.
+    private var viewable: [NSImage] { paths.compactMap { loaded[$0] }.filter { $0.size.width > 1 } }
 
     var body: some View {
         FlowLayout(spacing: s(8), lineSpacing: s(8)) {
             ForEach(paths, id: \.self) { path in
                 if let img = loaded[path], img.size.width > 1 {
-                    Image(nsImage: img)
-                        .resizable().aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: s(maxDim), maxHeight: s(single ? 380 : 200))
-                        .clipShape(RoundedRectangle(cornerRadius: s(8)))
-                        .overlay(RoundedRectangle(cornerRadius: s(8))
-                            .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
+                    LightboxThumb(image: img,
+                                  maxW: s(single ? 300 : 170),
+                                  maxH: s(single ? 240 : 140)) {
+                        if let i = viewable.firstIndex(where: { $0 === img }) {
+                            openLightbox(viewable, i)
+                        }
+                    }
                 } else {
                     RoundedRectangle(cornerRadius: s(8))
                         .fill(Color.primary.opacity(0.04))
@@ -292,6 +301,138 @@ struct InlineImages: View {
 
     private static func load(_ path: String) async -> NSImage? {
         await Task.detached(priority: .utility) { NSImage(contentsOfFile: path) }.value
+    }
+}
+
+// MARK: - Image thumbnail + lightbox
+
+/// One conversation image tile: a rounded thumbnail that lifts a touch on hover
+/// and opens the full-screen viewer on click.
+struct LightboxThumb: View {
+    let image: NSImage
+    let maxW: CGFloat
+    let maxH: CGFloat
+    let open: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
+            .frame(maxWidth: maxW, maxHeight: maxH)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.primary.opacity(hovering ? 0.22 : 0.1), lineWidth: 0.5))
+            .shadow(color: .black.opacity(hovering ? 0.22 : 0), radius: hovering ? 10 : 0, y: hovering ? 4 : 0)
+            .scaleEffect(hovering ? 1.04 : 1, anchor: .center)
+            .animation(.spring(response: 0.28, dampingFraction: 0.72), value: hovering)
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .onHover { hovering = $0; if $0 { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
+            .onTapGesture(perform: open)
+            .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// Environment action "open the image viewer on these images at this index".
+/// Passed through the environment (like `editPrompt`) so image tiles don't
+/// subscribe to the whole AppModel; always-equal Equatable avoids invalidation.
+struct OpenLightboxAction: Equatable {
+    var action: ([NSImage], Int) -> Void = { _, _ in }
+    func callAsFunction(_ images: [NSImage], _ index: Int) { action(images, index) }
+    static func == (l: Self, r: Self) -> Bool { true }
+}
+
+private struct OpenLightboxKey: EnvironmentKey {
+    static let defaultValue = OpenLightboxAction()
+}
+
+extension EnvironmentValues {
+    var openLightbox: OpenLightboxAction {
+        get { self[OpenLightboxKey.self] }
+        set { self[OpenLightboxKey.self] = newValue }
+    }
+}
+
+/// Full-window image viewer: a dimmed backdrop with the image centered. Click the
+/// backdrop (or Esc) closes; ←/→ (or the edge chevrons) walk a multi-image group.
+/// Presentation/dismissal are animated by the caller's `.transition`.
+struct LightboxView: View {
+    @EnvironmentObject var model: AppModel
+    let box: AppModel.Lightbox
+
+    private var image: NSImage? {
+        box.images.indices.contains(box.index) ? box.images[box.index] : nil
+    }
+
+    var body: some View {
+        ZStack {
+            // Dimmed, blurred backdrop — a click anywhere off the image closes.
+            Rectangle()
+                .fill(.black.opacity(0.62))
+                .background(.ultraThinMaterial)
+                .ignoresSafeArea()
+                .onTapGesture { model.dismissLightbox() }
+
+            if let image {
+                Image(nsImage: image)
+                    .resizable().aspectRatio(contentMode: .fit)
+                    .padding(.horizontal, 56).padding(.vertical, 40)
+                    .shadow(color: .black.opacity(0.4), radius: 30, y: 12)
+                    // A click on the image itself must not fall through to the
+                    // backdrop's close gesture.
+                    .contentShape(Rectangle())
+                    .onTapGesture { }
+                    .id(box.index)
+                    .transition(.opacity)
+            }
+
+            if box.images.count > 1 {
+                HStack {
+                    chevron("chevron.left") { model.lightboxStep(-1) }
+                    Spacer()
+                    chevron("chevron.right") { model.lightboxStep(1) }
+                }
+                .padding(.horizontal, 18)
+
+                VStack {
+                    Spacer()
+                    Text("\(box.index + 1) / \(box.images.count)")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(.black.opacity(0.4), in: Capsule())
+                        .padding(.bottom, 22)
+                }
+            }
+
+            // Close button, top-right.
+            VStack {
+                HStack {
+                    Spacer()
+                    Button { model.dismissLightbox() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(9)
+                            .background(.black.opacity(0.4), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(18)
+                }
+                Spacer()
+            }
+        }
+        .animation(.easeInOut(duration: 0.18), value: box.index)
+    }
+
+    private func chevron(_ name: String, _ tap: @escaping () -> Void) -> some View {
+        Button(action: tap) {
+            Image(systemName: name)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(12)
+                .background(.black.opacity(0.4), in: Circle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
