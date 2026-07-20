@@ -17,6 +17,9 @@ struct ToolUse: Hashable, Identifiable {
     var toolUseID: String = ""
     /// Result/output text of the call (filled by linking tool_result later).
     var output: String = ""
+    /// Absolute path of the image this call reads, when it's a `Read` of an image
+    /// file — the transcript renders it inline instead of a plain tool chip.
+    var imageFilePath: String? = nil
 }
 
 /// An ordered piece of a message's content: prose or a tool call, in the exact
