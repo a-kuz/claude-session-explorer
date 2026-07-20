@@ -370,9 +370,19 @@ struct DialogTurn: Identifiable, Equatable {
                         orderedPieces.append(p)
                     }
                 }
-                images += m.imageCount
+                // Always advance the session-wide cursor so per-turn slices stay
+                // aligned with Loader.loadImages (which walks every image in file
+                // order). But an image carried by a user-role record swallowed
+                // into an assistant run is prompt plumbing — a pasted image is
+                // written twice, as base64 on the prompt AND as a numbered
+                // cache-ref on a following empty user record. That ref rides into
+                // the assistant turn; it's a duplicate of the prompt's own image,
+                // not part of Claude's reply, so it must not render under it.
                 imageCursor += m.imageCount
-                imgPaths.append(contentsOf: m.imagePaths)
+                if asUserTurn || m.role == .assistant {
+                    images += m.imageCount
+                    imgPaths.append(contentsOf: m.imagePaths)
+                }
                 if firstTimestamp == nil { firstTimestamp = m.timestamp }
             }
 
