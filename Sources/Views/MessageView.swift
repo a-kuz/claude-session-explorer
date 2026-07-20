@@ -211,8 +211,6 @@ struct ImageTiles: View {
     @Environment(\.openLightbox) private var openLightbox
 
     private var single: Bool { images.count == 1 }
-    /// Only the decodable tiles feed the viewer, so a click maps to the right one.
-    private var viewable: [NSImage] { images.filter { $0.size.width > 1 } }
 
     var body: some View {
         FlowLayout(spacing: s(8), lineSpacing: s(8)) {
@@ -221,9 +219,7 @@ struct ImageTiles: View {
                     LightboxThumb(image: img,
                                   maxW: s(single ? 300 : 170),
                                   maxH: s(single ? 240 : 140)) {
-                        if let i = viewable.firstIndex(where: { $0 === img }) {
-                            openLightbox(viewable, i)
-                        }
+                        openLightbox(.ready(img))
                     }
                 } else {
                     RoundedRectangle(cornerRadius: s(8))
@@ -258,9 +254,6 @@ struct InlineImages: View {
 
     private var single: Bool { paths.count == 1 }
 
-    /// Loaded, decodable images in path order — the viewer's set.
-    private var viewable: [NSImage] { paths.compactMap { loaded[$0] }.filter { $0.size.width > 1 } }
-
     var body: some View {
         FlowLayout(spacing: s(8), lineSpacing: s(8)) {
             ForEach(paths, id: \.self) { path in
@@ -268,9 +261,7 @@ struct InlineImages: View {
                     LightboxThumb(image: img,
                                   maxW: s(single ? 300 : 170),
                                   maxH: s(single ? 240 : 140)) {
-                        if let i = viewable.firstIndex(where: { $0 === img }) {
-                            openLightbox(viewable, i)
-                        }
+                        openLightbox(.file(path))
                     }
                 } else {
                     RoundedRectangle(cornerRadius: s(8))
@@ -356,7 +347,7 @@ struct ReadImageTile: View {
             if let image {
                 VStack(alignment: .leading, spacing: s(4)) {
                     LightboxThumb(image: image, maxW: s(300), maxH: s(240)) {
-                        openLightbox([image], 0)
+                        openLightbox(.file(path))
                     }
                     Text((path as NSString).lastPathComponent)
                         .font(.system(size: 10.5)).foregroundStyle(Theme.tertiaryText)
@@ -384,12 +375,29 @@ struct ReadImageTile: View {
     }
 }
 
-/// Environment action "open the image viewer on these images at this index".
-/// Passed through the environment (like `editPrompt`) so image tiles don't
-/// subscribe to the whole AppModel; always-equal Equatable avoids invalidation.
+/// One image in the session's viewer list: either already decoded (a pasted
+/// base64 image, held by identity) or a file path loaded lazily (a `Read`-image
+/// or an inline file ref). Two refs match when they point at the same picture.
+enum LightboxItem {
+    case ready(NSImage)
+    case file(String)
+
+    func matches(_ other: LightboxItem) -> Bool {
+        switch (self, other) {
+        case (.ready(let a), .ready(let b)): return a === b
+        case (.file(let a), .file(let b)):   return a == b
+        default: return false
+        }
+    }
+}
+
+/// Environment action "open the viewer at this image". The model positions it
+/// within the whole-session image list so ←/→ page through the session. Passed
+/// through the environment (like `editPrompt`) so image tiles don't subscribe to
+/// the whole AppModel; always-equal Equatable avoids invalidation.
 struct OpenLightboxAction: Equatable {
-    var action: ([NSImage], Int) -> Void = { _, _ in }
-    func callAsFunction(_ images: [NSImage], _ index: Int) { action(images, index) }
+    var action: (LightboxItem) -> Void = { _ in }
+    func callAsFunction(_ item: LightboxItem) { action(item) }
     static func == (l: Self, r: Self) -> Bool { true }
 }
 
@@ -405,14 +413,33 @@ extension EnvironmentValues {
 }
 
 /// Full-window image viewer: a dimmed backdrop with the image centered. Click the
-/// backdrop (or Esc) closes; ←/→ (or the edge chevrons) walk a multi-image group.
+/// backdrop (or Esc) closes; ←/→ (or the edge chevrons) walk EVERY image in the
+/// session. File-backed images decode lazily and are cached as they're visited.
 /// Presentation/dismissal are animated by the caller's `.transition`.
 struct LightboxView: View {
     @EnvironmentObject var model: AppModel
     let box: AppModel.Lightbox
 
+    /// Decoded file images, keyed by path, so paging back is instant.
+    @State private var loaded: [String: NSImage] = [:]
+    @State private var failed: Set<String> = []
+
+    private var current: LightboxItem? {
+        box.items.indices.contains(box.index) ? box.items[box.index] : nil
+    }
+
+    /// The image to show now, or nil while a file is still decoding.
     private var image: NSImage? {
-        box.images.indices.contains(box.index) ? box.images[box.index] : nil
+        switch current {
+        case .ready(let img): return img
+        case .file(let path): return loaded[path]
+        case nil: return nil
+        }
+    }
+
+    private var currentFailed: Bool {
+        if case .file(let path) = current { return failed.contains(path) }
+        return false
     }
 
     var body: some View {
@@ -435,9 +462,17 @@ struct LightboxView: View {
                     .onTapGesture { }
                     .id(box.index)
                     .transition(.opacity)
+            } else if currentFailed {
+                VStack(spacing: 8) {
+                    Image(systemName: "photo.badge.exclamationmark")
+                        .font(.system(size: 30)).foregroundStyle(.white.opacity(0.7))
+                    Text("Image unavailable").foregroundStyle(.white.opacity(0.7))
+                }
+            } else {
+                ProgressView().controlSize(.large).tint(.white)
             }
 
-            if box.images.count > 1 {
+            if box.items.count > 1 {
                 HStack {
                     chevron("chevron.left") { model.lightboxStep(-1) }
                     Spacer()
@@ -447,7 +482,7 @@ struct LightboxView: View {
 
                 VStack {
                     Spacer()
-                    Text("\(box.index + 1) / \(box.images.count)")
+                    Text("\(box.index + 1) / \(box.items.count)")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.85))
                         .padding(.horizontal, 12).padding(.vertical, 6)
@@ -474,6 +509,19 @@ struct LightboxView: View {
             }
         }
         .animation(.easeInOut(duration: 0.18), value: box.index)
+        .task(id: box.index) { await loadCurrentIfNeeded() }
+    }
+
+    /// Decode the current file image off the main thread if not already cached.
+    private func loadCurrentIfNeeded() async {
+        guard case .file(let path) = current, loaded[path] == nil, !failed.contains(path) else { return }
+        if let img = await Task.detached(priority: .userInitiated, operation: {
+            let i = NSImage(contentsOfFile: path); return (i?.size.width ?? 0) > 1 ? i : nil
+        }).value {
+            loaded[path] = img
+        } else {
+            failed.insert(path)
+        }
     }
 
     private func chevron(_ name: String, _ tap: @escaping () -> Void) -> some View {

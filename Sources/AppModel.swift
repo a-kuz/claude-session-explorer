@@ -127,7 +127,7 @@ final class AppModel: ObservableObject {
     /// here (once per blocks change) so per-scroll-frame and per-keypress paths
     /// stay O(1) instead of re-filtering the whole list on big sessions.
     @Published private(set) var blocks: [DialogBlock] = [] {
-        didSet { rebuildNavCache() }
+        didSet { rebuildNavCache(); rebuildSessionImageItems() }
     }
 
     /// Blocks led by a real user prompt — the navigable replies. Cached.
@@ -852,7 +852,12 @@ final class AppModel: ObservableObject {
         Task.detached(priority: .utility) {
             let imgs = Loader.loadImages(path)
             guard !imgs.isEmpty else { return }
-            await MainActor.run { if self.selectedID == id { self.dialogImages = imgs } }
+            await MainActor.run {
+                if self.selectedID == id {
+                    self.dialogImages = imgs
+                    self.rebuildSessionImageItems()   // .ready slices now resolvable
+                }
+            }
         }
     }
 
@@ -1633,28 +1638,63 @@ final class AppModel: ObservableObject {
     }
     @Published var promptEdit: PromptEdit?
 
-    /// Full-screen image viewer state: the images of the clicked tile group and
-    /// the one currently shown. nil = closed. Kept in the model so the overlay
-    /// lives at the window root (above every pane) and Esc/←/→ can drive it.
+    /// Full-screen image viewer state. `items` is the WHOLE session's images in
+    /// order, so ←/→ walk every image in the session, not just the clicked tile.
+    /// nil = closed. Kept in the model so the overlay lives at the window root
+    /// (above every pane) and Esc/←/→ can drive it.
     struct Lightbox {
-        var images: [NSImage]
+        var items: [LightboxItem]
         var index: Int
     }
     @Published var lightbox: Lightbox?
 
-    /// Open the viewer on `images`, focused on `index`.
-    func presentLightbox(_ images: [NSImage], index: Int) {
-        let valid = images.filter { $0.size.width > 1 }
-        guard !valid.isEmpty else { return }
-        let clamped = min(max(index, 0), valid.count - 1)
-        lightbox = Lightbox(images: valid, index: clamped)
+    /// Every renderable image in the open session, in reading order (pasted
+    /// base64, `Read` image files, and inline file refs). Rebuilt whenever the
+    /// blocks or the decoded `dialogImages` change. The viewer walks this list.
+    private(set) var sessionImageItems: [LightboxItem] = []
+
+    /// Open the viewer at the clicked image, positioned within the whole-session
+    /// list so the arrows page through every image. Falls back to a single-item
+    /// viewer if the tile isn't found in the list (shouldn't normally happen).
+    func presentLightbox(_ ref: LightboxItem) {
+        if let i = sessionImageItems.firstIndex(where: { $0.matches(ref) }) {
+            lightbox = Lightbox(items: sessionImageItems, index: i)
+        } else {
+            lightbox = Lightbox(items: [ref], index: 0)
+        }
     }
     func dismissLightbox() { lightbox = nil }
     /// Step to the neighbouring image (wraps around); no-op with a single image.
     func lightboxStep(_ delta: Int) {
-        guard var box = lightbox, box.images.count > 1 else { return }
-        box.index = (box.index + delta + box.images.count) % box.images.count
+        guard var box = lightbox, box.items.count > 1 else { return }
+        box.index = (box.index + delta + box.items.count) % box.items.count
         lightbox = box
+    }
+
+    /// Recompute the session-wide image list from the current blocks + decoded
+    /// images. Order mirrors the transcript: within each turn, `Read`-image tool
+    /// calls in segment order, then the turn's pasted/attachment images.
+    func rebuildSessionImageItems() {
+        var items: [LightboxItem] = []
+        for block in blocks {
+            for turn in block.turns {
+                for seg in turn.segments {
+                    if case .tool(let t) = seg, let p = t.imageFilePath {
+                        items.append(.file(p))
+                    }
+                }
+                if turn.imageCount > 0, turn.imageStartIndex >= 0 {
+                    let start = turn.imageStartIndex
+                    let end = min(start + turn.imageCount, dialogImages.count)
+                    for i in start..<max(start, end) where dialogImages[i].size.width > 1 {
+                        items.append(.ready(dialogImages[i]))
+                    }
+                } else if !turn.imagePaths.isEmpty {
+                    for p in turn.imagePaths { items.append(.file(p)) }
+                }
+            }
+        }
+        sessionImageItems = items
     }
 
     /// Open the edit sheet for the user prompt leading the turn `turnID`.

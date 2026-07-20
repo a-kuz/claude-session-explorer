@@ -50,7 +50,7 @@ struct RootView: View {
         .sheet(isPresented: $model.showHotkeyHelp) { HotkeyHelpView() }
         .sheet(item: $model.promptEdit) { edit in PromptEditView(edit: edit) }
         .environment(\.editPrompt, EditPromptAction { [weak model] in model?.beginEditPrompt(turnID: $0) })
-        .environment(\.openLightbox, OpenLightboxAction { [weak model] imgs, i in model?.presentLightbox(imgs, index: i) })
+        .environment(\.openLightbox, OpenLightboxAction { [weak model] item in model?.presentLightbox(item) })
         // Share-by-link progress/result. Dismissal while uploading is allowed —
         // the upload keeps running; only the sheet state is cleared on close.
         .sheet(isPresented: Binding(get: { model.shareState != nil },
