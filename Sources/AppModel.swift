@@ -1633,6 +1633,30 @@ final class AppModel: ObservableObject {
     }
     @Published var promptEdit: PromptEdit?
 
+    /// Full-screen image viewer state: the images of the clicked tile group and
+    /// the one currently shown. nil = closed. Kept in the model so the overlay
+    /// lives at the window root (above every pane) and Esc/←/→ can drive it.
+    struct Lightbox {
+        var images: [NSImage]
+        var index: Int
+    }
+    @Published var lightbox: Lightbox?
+
+    /// Open the viewer on `images`, focused on `index`.
+    func presentLightbox(_ images: [NSImage], index: Int) {
+        let valid = images.filter { $0.size.width > 1 }
+        guard !valid.isEmpty else { return }
+        let clamped = min(max(index, 0), valid.count - 1)
+        lightbox = Lightbox(images: valid, index: clamped)
+    }
+    func dismissLightbox() { lightbox = nil }
+    /// Step to the neighbouring image (wraps around); no-op with a single image.
+    func lightboxStep(_ delta: Int) {
+        guard var box = lightbox, box.images.count > 1 else { return }
+        box.index = (box.index + delta + box.images.count) % box.images.count
+        lightbox = box
+    }
+
     /// Open the edit sheet for the user prompt leading the turn `turnID`.
     /// The raw stored text (with reminders/attachments markup intact) is read
     /// back from the jsonl off-thread — the rendered turn body is noise-stripped

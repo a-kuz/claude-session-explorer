@@ -32,8 +32,15 @@ struct RootView: View {
                     .padding(.bottom, 24)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+
+            if let box = model.lightbox {
+                LightboxView(box: box)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                    .zIndex(100)
+            }
         }
         .environment(\.uiScale, model.fontScale)
+        .animation(.easeInOut(duration: 0.22), value: model.lightbox != nil)
         .animation(.easeInOut(duration: 0.2), value: model.sidebarCollapsed)
         .animation(.easeInOut(duration: 0.2), value: model.listCollapsed)
         .animation(.easeInOut(duration: 0.2), value: model.showOutline)
@@ -43,6 +50,7 @@ struct RootView: View {
         .sheet(isPresented: $model.showHotkeyHelp) { HotkeyHelpView() }
         .sheet(item: $model.promptEdit) { edit in PromptEditView(edit: edit) }
         .environment(\.editPrompt, EditPromptAction { [weak model] in model?.beginEditPrompt(turnID: $0) })
+        .environment(\.openLightbox, OpenLightboxAction { [weak model] imgs, i in model?.presentLightbox(imgs, index: i) })
         // Share-by-link progress/result. Dismissal while uploading is allowed —
         // the upload keeps running; only the sheet state is cleared on close.
         .sheet(isPresented: Binding(get: { model.shareState != nil },
@@ -212,6 +220,7 @@ private struct ModalKeyMonitor: NSViewRepresentable {
         private enum Key {
             static let escape: UInt16 = 53
             static let rightArrow: UInt16 = 124
+            static let leftArrow: UInt16 = 123
             static let upArrow: UInt16 = 126
             static let downArrow: UInt16 = 125
             static let returnKey: UInt16 = 36
@@ -245,6 +254,16 @@ private struct ModalKeyMonitor: NSViewRepresentable {
         @MainActor private func handle(_ event: NSEvent) -> Bool {
             guard let model else { return false }
             let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
+
+            // Image viewer grabs Esc / arrows while it's open, before anything else.
+            if model.lightbox != nil, mods.isEmpty {
+                switch event.keyCode {
+                case Key.escape:     model.dismissLightbox(); return true
+                case Key.leftArrow:  model.lightboxStep(-1);  return true
+                case Key.rightArrow: model.lightboxStep(1);   return true
+                default: break
+                }
+            }
 
             if model.triageMode {
                 switch (event.keyCode, mods) {
