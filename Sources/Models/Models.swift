@@ -318,9 +318,18 @@ struct DialogTurn: Identifiable, Equatable {
     /// A user message that carries a genuine typed prompt (not tool plumbing).
     /// Also the boundary that closes an assistant turn — used to find the last
     /// stable rebuild point when appending a tail.
+    /// An image-only paste has no prose at all (its text is just "[Image #1]",
+    /// which stripNoise removes), so images count as prompt content too.
     static func isRealUserPrompt(_ m: DialogMessage) -> Bool {
         guard m.role == .user, !m.isToolOrMeta else { return false }
-        return !MessageContent.stripNoise(m.bodyText).isEmpty
+        return !MessageContent.stripNoise(m.bodyText).isEmpty || m.imageCount > 0
+    }
+
+    /// A user record with no prose of its own, carrying only the numbered
+    /// cache-ref twin of an image already attached to the prompt above it.
+    private static func isImagePlumbing(_ m: DialogMessage) -> Bool {
+        m.role == .user && !m.isToolOrMeta && m.imageCount > 0
+            && MessageContent.stripNoise(m.bodyText).isEmpty
     }
 
     static func build(from messages: [DialogMessage], brief: Bool = false) -> [DialogTurn] {
@@ -393,6 +402,12 @@ struct DialogTurn: Identifiable, Equatable {
                 // One user turn = this prompt (tool plumbing won't precede it).
                 absorb(starter, asUserTurn: true)
                 i += 1
+                // Swallow the cache-ref twins that trail a pasted image, so they
+                // neither start a turn of their own nor duplicate the image.
+                while i < messages.count, isImagePlumbing(messages[i]) {
+                    absorb(messages[i], asUserTurn: false)
+                    i += 1
+                }
             } else {
                 // Assistant turn: swallow everything up to the next real prompt.
                 var j = i
