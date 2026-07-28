@@ -208,6 +208,12 @@ export function renderDialog(
   for (const block of blocks) {
     const blockNode = el("div", "block");
     blockNode.dataset.blockId = block.id;
+    // On wide screens the prompt lives in a side gutter (sticky) and the
+    // answers in the main column; on narrow ones both wrappers are
+    // display:contents and the flow matches the stacked layout.
+    const promptWrap = el("div", "block-prompt");
+    const answersWrap = el("div", "block-answers");
+    blockNode.append(promptWrap, answersWrap);
     for (const turn of block.turns) {
       if (turn.isUserPrompt) {
         const node = el("div", "turn-user");
@@ -222,7 +228,7 @@ export function renderDialog(
           if (window.getSelection()?.toString()) return;
           blockNode.scrollIntoView({ behavior: "smooth", block: "start" });
         });
-        blockNode.append(el("div", "prompt-sentinel"), node);
+        promptWrap.append(el("div", "prompt-sentinel"), node);
       } else {
         const node = el("div", "turn-assistant");
         // Consecutive tool segments render as one collapsed group.
@@ -243,7 +249,7 @@ export function renderDialog(
         if (turn.images.length) node.append(imagesNode(turn.images));
         const t = timeLabel(turn.timestamp);
         if (t) node.append(el("div", "turn-time", t));
-        blockNode.append(node);
+        answersWrap.append(node);
       }
     }
     container.append(blockNode);

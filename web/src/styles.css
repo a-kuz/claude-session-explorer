@@ -147,6 +147,9 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); border-co
 #dialog-placeholder { color: var(--muted); padding: 60px 0; text-align: center; font-family: var(--font-serif); font-size: 16px; }
 
 .block { margin-bottom: 22px; }
+/* The prompt/answers wrappers are layout-transparent in the stacked layout;
+   the wide-screen media query below turns them into side-by-side columns. */
+.block-prompt, .block-answers { display: contents; }
 /* Stacked sticky prompts: each user prompt pins to the top of the dialog pane
    while its answers scroll by; the next block's prompt pushes it out. The
    sentinel is a 1px marker above the header — an IntersectionObserver flips
@@ -261,6 +264,27 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); border-co
   display: flex; align-items: center; justify-content: center;
   font-family: var(--font-serif); font-size: 21px; color: var(--accent);
   pointer-events: none; z-index: 10;
+}
+
+/* ---- wide: prompts move into a sticky side gutter, answers on the right;
+   a huge prompt then never covers the answers ---- */
+@media (min-width: 1150px) {
+  #dialog { max-width: 1240px; }
+  .block { display: flex; gap: 30px; align-items: stretch; }
+  .block-prompt { display: block; width: 320px; flex: none; min-width: 0; }
+  .block-answers { display: block; flex: 1; min-width: 0; }
+  .block-prompt .turn-user {
+    margin: 6px 0 10px;
+    max-height: calc(100vh - 140px); overflow-y: auto;
+    font-size: 14px;
+  }
+  .block-prompt .turn-user .turn-time { float: none; display: block; margin: 0 0 4px; }
+  /* In the gutter the prompt never overlaps answers — no compact stuck form. */
+  .block-prompt .turn-user.stuck { cursor: default; box-shadow: none; border-color: var(--border); }
+  .block-prompt .turn-user.stuck .prompt-text {
+    display: block; -webkit-line-clamp: unset; overflow: visible;
+  }
+  .block-prompt .turn-user.stuck .msg-images { display: block; }
 }
 
 #btn-back { display: none; }
