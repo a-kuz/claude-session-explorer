@@ -236,10 +236,12 @@ enum MessageContent {
         guard let arr = content as? [Any] else { return false }
         let blocks = arr.compactMap { $0 as? [String: Any] }
         if blocks.isEmpty { return false }
-        return blocks.allSatisfy {
-            let t = $0["type"] as? String
-            return t == "tool_result" || t == "image" || t == "document"
-        }
+        let types = blocks.map { $0["type"] as? String }
+        // Nothing but images is a pasted attachment — a prompt of its own, not
+        // machinery. Images only ride along with real tool output inside a
+        // tool_result block.
+        if types.allSatisfy({ $0 == "image" }) { return false }
+        return types.allSatisfy { $0 == "tool_result" || $0 == "image" || $0 == "document" }
     }
 
     /// Machinery-stripping patterns, compiled once. `replacingOccurrences(options:
