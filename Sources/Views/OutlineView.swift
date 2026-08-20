@@ -77,6 +77,7 @@ struct OutlineView: View {
                     .foregroundStyle(active ? Theme.accent : Color.primary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
+                thumbnails(turn)
                 if let ts = turn.timestamp {
                     Text(Format.timeOrDate(ts))
                         .scaledFont(10.5)
@@ -106,6 +107,35 @@ struct OutlineView: View {
                 Button("Copy Selected (\(selection.count))") {
                     model.copyBlocksToClipboard(selection)
                 }
+            }
+        }
+    }
+
+    /// Thumbnails of the prompt's pasted images (slice of the lazily-loaded
+    /// session-wide image array, same indexing as the transcript). Placeholder
+    /// entries (empty NSImage) are skipped; up to 4 shown, the rest as "+N".
+    @ViewBuilder
+    private func thumbnails(_ turn: DialogTurn) -> some View {
+        if turn.imageCount > 0, turn.imageStartIndex >= 0, !model.dialogImages.isEmpty {
+            let start = turn.imageStartIndex
+            let end = min(start + turn.imageCount, model.dialogImages.count)
+            let shown = Array(start..<end).filter { model.dialogImages[$0].size.width > 1 }.prefix(4)
+            if !shown.isEmpty {
+                HStack(spacing: s(4)) {
+                    ForEach(Array(shown), id: \.self) { i in
+                        Image(nsImage: model.dialogImages[i])
+                            .resizable().scaledToFill()
+                            .frame(width: s(40), height: s(28))
+                            .clipShape(RoundedRectangle(cornerRadius: s(4)))
+                            .overlay(RoundedRectangle(cornerRadius: s(4))
+                                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
+                    }
+                    if end - start > shown.count {
+                        Text("+\(end - start - shown.count)")
+                            .scaledFont(10).foregroundStyle(Theme.tertiaryText)
+                    }
+                }
+                .padding(.top, s(2))
             }
         }
     }
