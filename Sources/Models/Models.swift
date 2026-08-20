@@ -307,7 +307,10 @@ struct DialogTurn: Identifiable, Equatable {
     /// Short one-line label for the outline / table of contents.
     var outlineTitle: String {
         let first = bodyChunks.first ?? ""
-        let oneLine = MessageContent.oneLine(first, max: 80)
+        // Give the view more than it can show: OutlineView clamps to two lines
+        // and draws its own "…" — a shorter hard cut here truncated prompts
+        // mid-word with no ellipsis at all.
+        let oneLine = MessageContent.oneLine(first, max: 200)
         if !oneLine.isEmpty { return oneLine }
         if imageCount > 0 { return imageCount == 1 ? "🖼 image" : "🖼 \(imageCount) images" }
         return "…"
