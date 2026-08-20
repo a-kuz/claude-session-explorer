@@ -308,7 +308,9 @@ struct DialogTurn: Identifiable, Equatable {
     var outlineTitle: String {
         let first = bodyChunks.first ?? ""
         let oneLine = MessageContent.oneLine(first, max: 80)
-        return oneLine.isEmpty ? (imageCount > 0 ? "attachment" : "…") : oneLine
+        if !oneLine.isEmpty { return oneLine }
+        if imageCount > 0 { return imageCount == 1 ? "🖼 image" : "🖼 \(imageCount) images" }
+        return "…"
     }
 
     /// Build turns. A "speaker" run is broken only by a *real* user prompt;
