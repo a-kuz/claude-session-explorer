@@ -307,7 +307,7 @@ final class AppModel: ObservableObject {
     private var watcher: FolderWatcher?
     private let store = Store()
     /// Derived-metadata schema version; bump to force recompute of cached rows.
-    static let metaSchemaVersion = 3  // v3: parentSessionId (forkedFrom) captured
+    static let metaSchemaVersion = 4  // v4: mid-turn prompts (queued_command attachments) counted
     /// Last opened session id, restored on next launch.
     private var lastSelectedID: String?
     private var didRestore = false
