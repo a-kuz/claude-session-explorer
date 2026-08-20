@@ -99,6 +99,22 @@ enum Loader {
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 
+    /// The `attachment` payload of a human mid-turn prompt, or nil. A prompt
+    /// queued while Claude is working is drained into the running turn and
+    /// recorded as `type:"attachment"` / `attachment.type:"queued_command"` —
+    /// it never gets a `type:"user"` record of its own. The guards mirror the
+    /// official CLI's transcript filter (transcriptSearch.ts): positively a
+    /// typed prompt, not a task-notification and not meta machinery.
+    /// `prompt` has the same shape as `message.content` (string | blocks).
+    static func queuedPrompt(_ rec: [String: Any]) -> [String: Any]? {
+        guard (rec["type"] as? String) == "attachment",
+              let att = rec["attachment"] as? [String: Any],
+              (att["type"] as? String) == "queued_command",
+              (att["commandMode"] as? String) != "task-notification",
+              (att["isMeta"] as? Bool) != true else { return nil }
+        return att
+    }
+
     /// Running aggregate of the light metadata fields. Every field accumulates
     /// monotonically over jsonl records in file order, so the same accumulator can
     /// be filled by a cold full scan OR seeded from a cached row and advanced over
@@ -175,6 +191,25 @@ enum Loader {
                         return
                     }
                     let raw = MessageContent.contentToText(c)
+                    let text = MessageContent.oneLine(MessageContent.stripNoise(raw))
+                    if MessageContent.isMeaningfulUserText(text) {
+                        userTurnCount += 1
+                        if firstUserText.isEmpty { firstUserText = text }
+                        lastUserText = text
+                        if let ts = ts { lastUserTimestamp = ts }
+                    }
+                }
+                if cwd == nil, let c = rec["cwd"] as? String { cwd = c }
+            case "attachment":
+                // Mid-turn user prompt (queued_command) — counts as a user turn.
+                if (rec["isSidechain"] as? Bool) != true, let att = queuedPrompt(rec) {
+                    messageCount += 1
+                    let ts = parseDate((att["timestamp"] as? String) ?? rec["timestamp"] as? String)
+                    if let ts = ts {
+                        lastTimestamp = ts
+                        if firstTimestamp == nil { firstTimestamp = ts }
+                    }
+                    let raw = MessageContent.contentToText(att["prompt"])
                     let text = MessageContent.oneLine(MessageContent.stripNoise(raw))
                     if MessageContent.isMeaningfulUserText(text) {
                         userTurnCount += 1
@@ -339,11 +374,24 @@ enum Loader {
             let line = raw.trimmingCharacters(in: .whitespaces)
             guard let rec = parseLine(line) else { continue }
             let type = rec["type"] as? String
-            guard type == "user" || type == "assistant" else { continue }
             if (rec["isSidechain"] as? Bool) == true { continue }
 
-            let msg = rec["message"] as? [String: Any]
-            let c = msg?["content"]
+            let c: Any?
+            let roleType: String
+            var timestampString = rec["timestamp"] as? String
+            if type == "user" || type == "assistant" {
+                c = (rec["message"] as? [String: Any])?["content"]
+                roleType = type!
+            } else if type == "attachment", let att = queuedPrompt(rec) {
+                // A prompt the user sent mid-turn: drained from the queue while
+                // Claude was working, it is written ONLY as this attachment —
+                // no matching `type:"user"` record ever appears.
+                c = att["prompt"]
+                roleType = "user"
+                if let ts = att["timestamp"] as? String { timestampString = ts }
+            } else {
+                continue
+            }
             let text = MessageContent.contentToText(c).trimmingCharacters(in: .whitespacesAndNewlines)
             let ex = MessageContent.extractContent(c)
             for (k, v) in ex.resultsByID { resultsByID[k] = v }
@@ -363,9 +411,9 @@ enum Loader {
                 uuid: recUUID,
                 parentUuid: rec["parentUuid"] as? String,
                 logicalParentUuid: rec["logicalParentUuid"] as? String,
-                role: type == "user" ? .user : .assistant,
+                role: roleType == "user" ? .user : .assistant,
                 text: text,
-                timestamp: parseDate(rec["timestamp"] as? String),
+                timestamp: parseDate(timestampString),
                 isToolOrMeta: isToolOrMeta,
                 toolUses: ex.toolUses,
                 toolResults: ex.toolResults,
@@ -433,9 +481,15 @@ enum Loader {
         content.enumerateLines { line, _ in
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard trimmed.contains("\"image\"") || trimmed.contains("Image: source:"),
-                  let rec = parseLine(trimmed),
-                  (rec["type"] as? String) == "user" || (rec["type"] as? String) == "assistant",
-                  let c = (rec["message"] as? [String: Any])?["content"] as? [Any] else { return }
+                  let rec = parseLine(trimmed) else { return }
+            let type = rec["type"] as? String
+            var content: [Any]?
+            if type == "user" || type == "assistant" {
+                content = (rec["message"] as? [String: Any])?["content"] as? [Any]
+            } else if type == "attachment", let att = queuedPrompt(rec) {
+                content = att["prompt"] as? [Any]
+            }
+            guard let c = content else { return }
             for block in c {
                 if let b = block as? [String: Any] {
                     switch b["type"] as? String {
@@ -595,7 +649,7 @@ enum Loader {
         var parts = [meta.title ?? "", meta.projectLabel, meta.projectPath]
         content.enumerateLines { line, _ in
             // Only index human-readable text fields, not the whole jsonl noise.
-            if line.contains("\"text\"") || line.contains("\"content\"") {
+            if line.contains("\"text\"") || line.contains("\"content\"") || line.contains("\"prompt\"") {
                 parts.append(line)
             }
         }
