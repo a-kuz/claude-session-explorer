@@ -519,10 +519,22 @@ struct DialogBlock: Identifiable, Equatable {
     }
 }
 
-/// A project with its session count, for the sidebar.
+/// A project with its session count, for the sidebar. Projects nested inside
+/// another project's directory (worktrees, sub-packages) become its children,
+/// so the sidebar shows the real folder hierarchy.
 struct ProjectInfo: Identifiable, Hashable {
     var id: String { path }
     let path: String
+    /// Path relative to the parent node; the basename for a root.
     let label: String
+    /// Sessions in this exact directory (not counting nested projects).
     let count: Int
+    let depth: Int
+    let children: [ProjectInfo]
+
+    /// Sessions here plus in every nested project below.
+    var totalCount: Int { count + children.reduce(0) { $0 + $1.totalCount } }
+
+    /// This node's path and every path below it.
+    var subtreePaths: [String] { [path] + children.flatMap(\.subtreePaths) }
 }
