@@ -157,7 +157,7 @@ private struct ProjectRow: View {
             HStack(spacing: 8) {
                 RoundedRectangle(cornerRadius: 3)
                     .fill(Theme.dotColor(for: project.path)).frame(width: 9, height: 9)
-                Text(project.label).lineLimit(1).truncationMode(.middle)
+                Text(project.label).lineLimit(1)
                 Spacer()
                 // A collapsed parent accounts for the sessions it hides.
                 Text("\(collapsed && !project.children.isEmpty ? project.totalCount : project.count)")

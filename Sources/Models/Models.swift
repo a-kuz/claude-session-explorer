@@ -525,7 +525,6 @@ struct DialogBlock: Identifiable, Equatable {
 struct ProjectInfo: Identifiable, Hashable {
     var id: String { path }
     let path: String
-    /// Path relative to the parent node; the basename for a root.
     let label: String
     /// Sessions in this exact directory (not counting nested projects).
     let count: Int
