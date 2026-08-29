@@ -122,7 +122,8 @@ struct SidebarView: View {
 /// project's directory sit under it, indented behind a disclosure triangle.
 /// The checkbox shows only while checked or hovered — an empty square on every
 /// row is constant noise for a rare action; it covers the whole subtree, so a
-/// partly selected parent shows a dash. Clicking anywhere on the row toggles it.
+/// partly selected parent shows a dash. Clicking anywhere on the row cycles it:
+/// the whole subtree, then this directory alone, then off.
 private struct ProjectRow: View {
     let project: ProjectInfo
     @EnvironmentObject var model: AppModel
@@ -152,7 +153,7 @@ private struct ProjectRow: View {
                 .foregroundStyle(check == .off ? Color.secondary : Theme.accent)
                 .opacity(check != .off || hovering ? 1 : 0)
                 .contentShape(Rectangle())
-                .onTapGesture { model.toggleProject(project) }
+                .onTapGesture { toggle() }
 
             HStack(spacing: 8) {
                 RoundedRectangle(cornerRadius: 3)
@@ -166,7 +167,10 @@ private struct ProjectRow: View {
             .contentShape(Rectangle())
             .onTapGesture { model.toggleProject(project) }
         }
-        .help(project.path)
+        .help(project.children.isEmpty ? project.path
+              : "\(project.path)\nClick cycles: with nested projects → this folder only → off")
         .onHover { hovering = $0 }
     }
+
+    private func toggle() { model.toggleProject(project) }
 }

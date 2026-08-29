@@ -760,12 +760,22 @@ final class AppModel: ObservableObject {
 
     func isProjectSelected(_ path: String) -> Bool { selectedProjectPaths.contains(path) }
 
-    /// Toggling a node applies to everything nested under it — a partially
-    /// selected subtree turns fully on.
+    /// Clicking a node with nested projects cycles through the three useful
+    /// states: nothing → the whole subtree → this directory alone. A leaf just
+    /// toggles.
     func toggleProject(_ p: ProjectInfo) {
-        let paths = p.subtreePaths
-        if projectCheck(p) == .on { selectedProjectPaths.subtract(paths) }
-        else { selectedProjectPaths.formUnion(paths) }
+        let descendants = Set(p.subtreePaths).subtracting([p.path])
+        let selfSelected = selectedProjectPaths.contains(p.path)
+        if descendants.isEmpty {
+            if selfSelected { selectedProjectPaths.remove(p.path) }
+            else { selectedProjectPaths.insert(p.path) }
+        } else if projectCheck(p) == .on {
+            selectedProjectPaths.subtract(descendants)      // whole subtree → self only
+        } else if selfSelected && selectedProjectPaths.isDisjoint(with: descendants) {
+            selectedProjectPaths.remove(p.path)             // self only → nothing
+        } else {
+            selectedProjectPaths.formUnion(p.subtreePaths)  // nothing / partial → whole subtree
+        }
         recomputeHits(instant: false)
         if !(filteredHits.contains { $0.meta.id == selectedID }) {
             selectedID = filteredHits.first?.meta.id
