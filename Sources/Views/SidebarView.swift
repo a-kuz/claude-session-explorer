@@ -21,8 +21,8 @@ struct SidebarView: View {
             }
 
             Section {
-                ForEach(model.projects) { p in
-                    projectRow(p)
+                ForEach(model.visibleProjectRows) { p in
+                    ProjectRow(project: p)
                 }
             } header: {
                 HStack(spacing: 4) {
@@ -116,41 +116,57 @@ struct SidebarView: View {
         .onTapGesture { model.setScope(s) }
     }
 
-    private func projectRow(_ p: ProjectInfo) -> some View {
-        ProjectRow(project: p)
-    }
 }
 
-/// A project row (multi-select). The native checkbox shows only while checked
-/// or hovered — an empty square on every row is constant noise for a rare
-/// action. Clicking anywhere on the row still toggles it.
+/// A project row (multi-select) in the hierarchy: projects nested inside another
+/// project's directory sit under it, indented behind a disclosure triangle.
+/// The checkbox shows only while checked or hovered — an empty square on every
+/// row is constant noise for a rare action; it covers the whole subtree, so a
+/// partly selected parent shows a dash. Clicking anywhere on the row toggles it.
 private struct ProjectRow: View {
     let project: ProjectInfo
     @EnvironmentObject var model: AppModel
     @State private var hovering = false
 
     var body: some View {
-        let checked = model.isProjectSelected(project.path)
-        HStack(spacing: 8) {
-            Toggle("", isOn: Binding(
-                get: { checked },
-                set: { _ in model.toggleProject(project.path) }
-            ))
-            .toggleStyle(.checkbox)
-            .labelsHidden()
-            .opacity(checked || hovering ? 1 : 0)
-            // The rest of the row toggles too, but stays outside the Toggle so
-            // a click on the checkbox itself doesn't fire twice.
+        let check = model.projectCheck(project)
+        let collapsed = model.isProjectCollapsed(project.path)
+        HStack(spacing: 6) {
+            Color.clear.frame(width: CGFloat(project.depth) * 11, height: 1)
+            Group {
+                if project.children.isEmpty {
+                    Color.clear
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(collapsed ? 0 : 90))
+                        .contentShape(Rectangle())
+                        .onTapGesture { model.toggleProjectCollapsed(project.path) }
+                }
+            }
+            .frame(width: 10, height: 12)
+
+            Image(systemName: check == .on ? "checkmark.square.fill"
+                            : check == .mixed ? "minus.square.fill" : "square")
+                .foregroundStyle(check == .off ? Color.secondary : Theme.accent)
+                .opacity(check != .off || hovering ? 1 : 0)
+                .contentShape(Rectangle())
+                .onTapGesture { model.toggleProject(project) }
+
             HStack(spacing: 8) {
                 RoundedRectangle(cornerRadius: 3)
                     .fill(Theme.dotColor(for: project.path)).frame(width: 9, height: 9)
-                Text(project.label).lineLimit(1)
+                Text(project.label).lineLimit(1).truncationMode(.middle)
                 Spacer()
-                Text("\(project.count)").foregroundStyle(.tertiary).font(.callout)
+                // A collapsed parent accounts for the sessions it hides.
+                Text("\(collapsed && !project.children.isEmpty ? project.totalCount : project.count)")
+                    .foregroundStyle(.tertiary).font(.callout)
             }
             .contentShape(Rectangle())
-            .onTapGesture { model.toggleProject(project.path) }
+            .onTapGesture { model.toggleProject(project) }
         }
+        .help(project.path)
         .onHover { hovering = $0 }
     }
 }

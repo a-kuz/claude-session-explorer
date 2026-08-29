@@ -29,6 +29,9 @@ final class AppModel: ObservableObject {
     }
     @Published var scope: Scope = .all { didSet { persistUIState() } }
     @Published var selectedProjectPaths: Set<String> = [] { didSet { persistUIState() } }
+    /// Collapsed nodes of the project tree — stored as the collapsed set so a
+    /// fresh install shows the hierarchy expanded.
+    @Published var collapsedProjectPaths: Set<String> = [] { didSet { persistUIState() } }
 
     /// Terminal used to open/resume sessions; mirrored into OpenSession.
     @Published var terminalApp: TerminalApp = .ghostty {
@@ -337,6 +340,7 @@ final class AppModel: ObservableObject {
         static let wOutline = "ui.w.outline"
         static let scope = "ui.scope"               // all|favorites|today|last24h|last2d|week
         static let projects = "ui.projects"         // [String] selected project paths
+        static let projectsCollapsed = "ui.projectsCollapsed" // [String] collapsed tree nodes
         static let terminal = "ui.terminal"         // ghostty|terminal|iterm
         static let claudePath = "ui.claudePath"     // absolute path override
         static let proseFont = "ui.proseFont"       // conversation prose family
@@ -368,6 +372,7 @@ final class AppModel: ObservableObject {
         default: scope = .all
         }
         selectedProjectPaths = Set(d.stringArray(forKey: K.projects) ?? [])
+        collapsedProjectPaths = Set(d.stringArray(forKey: K.projectsCollapsed) ?? [])
         if let t = d.string(forKey: K.terminal), let m = TerminalApp(rawValue: t) { terminalApp = m }
         claudePath = d.string(forKey: K.claudePath) ?? ""
         proseFont = d.string(forKey: K.proseFont) ?? ""
@@ -417,6 +422,7 @@ final class AppModel: ObservableObject {
         }
         d.set(scopeStr, forKey: K.scope)
         d.set(Array(selectedProjectPaths), forKey: K.projects)
+        d.set(Array(collapsedProjectPaths), forKey: K.projectsCollapsed)
         d.set(terminalApp.rawValue, forKey: K.terminal)
         d.set(claudePath, forKey: K.claudePath)
         d.set(proseFont, forKey: K.proseFont)
@@ -648,14 +654,49 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func rebuildProjects() {
-        var counts: [String: (label: String, n: Int)] = [:]
-        for s in allSessions {
-            let cur = counts[s.projectPath]
-            counts[s.projectPath] = (s.projectLabel, (cur?.n ?? 0) + 1)
+    /// A mutable tree node used only while assembling the project forest.
+    private final class ProjectNode {
+        let path: String
+        let comps: [String]
+        let count: Int
+        var children: [ProjectNode] = []
+        init(path: String, comps: [String], count: Int) {
+            self.path = path; self.comps = comps; self.count = count
         }
-        projects = counts.map { ProjectInfo(path: $0.key, label: $0.value.label, count: $0.value.n) }
-            .sorted { $0.count > $1.count }
+    }
+
+    private func rebuildProjects() {
+        var counts: [String: Int] = [:]
+        for s in allSessions { counts[s.projectPath, default: 0] += 1 }
+
+        // Lexicographic order puts a directory immediately before everything
+        // nested under it, so a stack is enough to find each node's parent.
+        // Comparison is by path COMPONENTS: "…/backend2" must not land under
+        // "…/backend".
+        var roots: [ProjectNode] = []
+        var stack: [ProjectNode] = []
+        for path in counts.keys.sorted() {
+            let comps = path.split(separator: "/").map(String.init)
+            while let top = stack.last, !comps.starts(with: top.comps) { stack.removeLast() }
+            let node = ProjectNode(path: path, comps: comps, count: counts[path] ?? 0)
+            if let parent = stack.last { parent.children.append(node) } else { roots.append(node) }
+            stack.append(node)
+        }
+
+        projects = roots.map { projectInfo($0, parent: nil, depth: 0) }
+            .sorted { $0.totalCount > $1.totalCount }
+    }
+
+    private func projectInfo(_ n: ProjectNode, parent: ProjectNode?, depth: Int) -> ProjectInfo {
+        let kids = n.children.map { projectInfo($0, parent: n, depth: depth + 1) }
+            .sorted { $0.totalCount > $1.totalCount }
+        let label: String
+        if let parent, n.comps.count > parent.comps.count {
+            label = n.comps.dropFirst(parent.comps.count).joined(separator: "/")
+        } else {
+            label = n.comps.last ?? n.path
+        }
+        return ProjectInfo(path: n.path, label: label, count: n.count, depth: depth, children: kids)
     }
 
     // MARK: - Filtering
@@ -712,19 +753,53 @@ final class AppModel: ObservableObject {
 
     // MARK: - Project multi-select (checkboxes) — independent of scope.
 
+    /// Check state of a node: its whole subtree, not just the node itself.
+    enum ProjectCheck { case on, off, mixed }
+
+    func projectCheck(_ p: ProjectInfo) -> ProjectCheck {
+        let paths = p.subtreePaths
+        let n = paths.reduce(0) { $0 + (selectedProjectPaths.contains($1) ? 1 : 0) }
+        if n == 0 { return .off }
+        return n == paths.count ? .on : .mixed
+    }
+
     func isProjectSelected(_ path: String) -> Bool { selectedProjectPaths.contains(path) }
 
-    func toggleProject(_ path: String) {
-        if selectedProjectPaths.contains(path) { selectedProjectPaths.remove(path) }
-        else { selectedProjectPaths.insert(path) }
+    /// Toggling a node applies to everything nested under it — a partially
+    /// selected subtree turns fully on.
+    func toggleProject(_ p: ProjectInfo) {
+        let paths = p.subtreePaths
+        if projectCheck(p) == .on { selectedProjectPaths.subtract(paths) }
+        else { selectedProjectPaths.formUnion(paths) }
         recomputeHits(instant: false)
         if !(filteredHits.contains { $0.meta.id == selectedID }) {
             selectedID = filteredHits.first?.meta.id
         }
     }
 
+    func isProjectCollapsed(_ path: String) -> Bool { collapsedProjectPaths.contains(path) }
+
+    func toggleProjectCollapsed(_ path: String) {
+        if collapsedProjectPaths.contains(path) { collapsedProjectPaths.remove(path) }
+        else { collapsedProjectPaths.insert(path) }
+    }
+
+    /// The visible rows of the project tree, parents before their children,
+    /// with collapsed subtrees omitted.
+    var visibleProjectRows: [ProjectInfo] {
+        var out: [ProjectInfo] = []
+        func walk(_ nodes: [ProjectInfo]) {
+            for n in nodes {
+                out.append(n)
+                if !collapsedProjectPaths.contains(n.path) { walk(n.children) }
+            }
+        }
+        walk(projects)
+        return out
+    }
+
     func selectAllProjects() {
-        selectedProjectPaths = Set(projects.map(\.path))
+        selectedProjectPaths = Set(projects.flatMap(\.subtreePaths))
         recomputeHits(instant: false)
     }
 
