@@ -683,20 +683,15 @@ final class AppModel: ObservableObject {
             stack.append(node)
         }
 
-        projects = roots.map { projectInfo($0, parent: nil, depth: 0) }
+        projects = roots.map { projectInfo($0, depth: 0) }
             .sorted { $0.totalCount > $1.totalCount }
     }
 
-    private func projectInfo(_ n: ProjectNode, parent: ProjectNode?, depth: Int) -> ProjectInfo {
-        let kids = n.children.map { projectInfo($0, parent: n, depth: depth + 1) }
+    private func projectInfo(_ n: ProjectNode, depth: Int) -> ProjectInfo {
+        let kids = n.children.map { projectInfo($0, depth: depth + 1) }
             .sorted { $0.totalCount > $1.totalCount }
-        let label: String
-        if let parent, n.comps.count > parent.comps.count {
-            label = n.comps.dropFirst(parent.comps.count).joined(separator: "/")
-        } else {
-            label = n.comps.last ?? n.path
-        }
-        return ProjectInfo(path: n.path, label: label, count: n.count, depth: depth, children: kids)
+        return ProjectInfo(path: n.path, label: n.comps.last ?? n.path,
+                           count: n.count, depth: depth, children: kids)
     }
 
     // MARK: - Filtering
