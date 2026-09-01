@@ -669,14 +669,18 @@ final class AppModel: ObservableObject {
         var counts: [String: Int] = [:]
         for s in allSessions { counts[s.projectPath, default: 0] += 1 }
 
-        // Lexicographic order puts a directory immediately before everything
-        // nested under it, so a stack is enough to find each node's parent.
-        // Comparison is by path COMPONENTS: "…/backend2" must not land under
-        // "…/backend".
+        // Ordering is COMPONENT-wise, not by the raw path string: sorting
+        // strings would put "ws/msngr-avpriv" between "ws/msngr" and
+        // "ws/msngr/.claude/…" ('-' < '/'), breaking up the subtree. Comparing
+        // components keeps every descendant right behind its ancestor, so a
+        // stack is enough to find each node's parent — and "…/backend2" still
+        // doesn't land under "…/backend".
         var roots: [ProjectNode] = []
         var stack: [ProjectNode] = []
-        for path in counts.keys.sorted() {
-            let comps = path.split(separator: "/").map(String.init)
+        let sorted = counts.keys
+            .map { (path: $0, comps: $0.split(separator: "/").map(String.init)) }
+            .sorted { $0.comps.lexicographicallyPrecedes($1.comps) }
+        for (path, comps) in sorted {
             while let top = stack.last, !comps.starts(with: top.comps) { stack.removeLast() }
             let node = ProjectNode(path: path, comps: comps, count: counts[path] ?? 0)
             if let parent = stack.last { parent.children.append(node) } else { roots.append(node) }
