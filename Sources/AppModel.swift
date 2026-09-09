@@ -110,9 +110,25 @@ final class AppModel: ObservableObject {
     /// pane follows one row: keep the current `selectedID` if it's still in the
     /// set, otherwise adopt another member (or clear when empty).
     func updateListSelection(_ ids: Set<String>) {
+        // A prompt child row (search tree) carries "<session>#prompt:<uuid>":
+        // selecting it opens the session at that prompt and keeps the child
+        // row highlighted instead of collapsing to the session row.
+        if let tag = ids.first(where: { $0.contains(Self.promptTagSeparator) }),
+           let (sid, uuid) = Self.splitPromptTag(tag) {
+            openPrompt(sessionID: sid, uuid: uuid)
+            listSelection = [tag]
+            return
+        }
         listSelection = ids
         if let cur = selectedID, ids.contains(cur) { return }
         selectedID = ids.first
+    }
+
+    static let promptTagSeparator = "#prompt:"
+    static func promptTag(sessionID: String, uuid: String) -> String { sessionID + promptTagSeparator + uuid }
+    static func splitPromptTag(_ tag: String) -> (String, String)? {
+        guard let r = tag.range(of: promptTagSeparator) else { return nil }
+        return (String(tag[..<r.lowerBound]), String(tag[r.upperBound...]))
     }
 
     /// Снять выбор полностью: пустой detail-pane. `selectedID = nil` через свой
@@ -125,6 +141,9 @@ final class AppModel: ObservableObject {
     /// Programmatic moves of `selectedID` (search, hide, triage, arrow keys)
     /// collapse the multi-selection down to that single row.
     private func syncListSelectionToSelected() {
+        // A highlighted prompt child of the selected session stays highlighted.
+        if let sid = selectedID, listSelection.count == 1,
+           let tag = listSelection.first, Self.splitPromptTag(tag)?.0 == sid { return }
         let want: Set<String> = selectedID.map { [$0] } ?? []
         if listSelection != want { listSelection = want }
     }
@@ -1390,7 +1409,7 @@ final class AppModel: ObservableObject {
     /// The list rows ⌘C acts on: the multi-selection if present, else the single
     /// selected row.
     private var copyTargetIDs: Set<String> {
-        if !listSelection.isEmpty { return listSelection }
+        if !listSelection.isEmpty { return Set(listSelection.map { Self.splitPromptTag($0)?.0 ?? $0 }) }
         return selectedID.map { [$0] } ?? []
     }
 
