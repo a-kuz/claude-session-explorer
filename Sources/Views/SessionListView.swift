@@ -51,8 +51,7 @@ struct SessionListView: View {
         Group {
             if model.loading {
                 VStack(spacing: 10) {
-                    ClaudeBurstView()
-                        .frame(width: 110, height: 110)
+                    ProgressView().controlSize(.large)
                     Text("Scanning sessions…")
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -77,6 +76,28 @@ struct SessionListView: View {
                                                 isSelected: selected)
                                     .tag(hit.meta.id)
                                     .listRowBackground(rowBackground(selected))
+                                // Matched prompts as children of the session row;
+                                // a click opens the session at that prompt.
+                                ForEach(Array(hit.prompts.prefix(promptRowLimit).enumerated()), id: \.offset) { i, p in
+                                    PromptResultRow(prompt: p, tokens: model.searchTokens)
+                                        .contentShape(Rectangle())
+                                        .onTapGesture { model.openPrompt(sessionID: hit.meta.id, uuid: p.uuid) }
+                                        // Not a selectable row: a unique tag keeps List
+                                        // identity apart from the session rows and from
+                                        // other sessions' children.
+                                        .tag("\(hit.meta.id)#prompt\(i)")
+                                        .selectionDisabled()
+                                        .listRowBackground(Color.clear)
+                                        .listRowSeparator(.hidden)
+                                }
+                                if hit.prompts.count > promptRowLimit {
+                                    Text("+\(hit.prompts.count - promptRowLimit) more")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.tertiary)
+                                        .padding(.leading, 22)
+                                        .listRowBackground(Color.clear)
+                                        .listRowSeparator(.hidden)
+                                }
                             }
                         } header: {
                             HStack {
@@ -318,6 +339,70 @@ struct SizeBars: View {
     }
 }
 
+/// Cap on prompt children shown under one session in search results.
+private let promptRowLimit = 8
+
+/// A matched user prompt under its session in the search results.
+struct PromptResultRow: View {
+    let prompt: IndexedPrompt
+    let tokens: [String]
+    @Environment(\.uiScale) private var scale
+    @Environment(\.s) private var s
+
+    var body: some View {
+        HStack(alignment: .top, spacing: s(6)) {
+            Image(systemName: "arrow.turn.down.right")
+                .font(.system(size: 9 * scale, weight: .semibold))
+                .foregroundStyle(Theme.tertiaryText)
+                .padding(.top, s(3))
+            Text(highlighted)
+                .font(.system(size: 12 * scale)).lineLimit(2)
+                .foregroundStyle(Color.primary.opacity(0.85))
+        }
+        .padding(.leading, s(14))
+        .padding(.vertical, s(1))
+    }
+
+    /// A window of the prompt around its first token hit, so the match is
+    /// visible even in a long pasted prompt.
+    private var windowText: String {
+        let text = prompt.text
+        guard text.count > 220 else { return text }
+        let lower = text.lowercased()
+        var first: String.Index?
+        for tok in tokens where !tok.isEmpty {
+            if let r = lower.range(of: tok), first == nil || r.lowerBound < first! { first = r.lowerBound }
+        }
+        guard let at = first else { return String(text.prefix(220)) }
+        let lo = lower.index(at, offsetBy: -80, limitedBy: lower.startIndex) ?? lower.startIndex
+        let hi = lower.index(at, offsetBy: 140, limitedBy: lower.endIndex) ?? lower.endIndex
+        let lead = lo > lower.startIndex ? "…" : ""
+        let trail = hi < lower.endIndex ? "…" : ""
+        return lead + String(text[lo..<hi]) + trail
+    }
+
+    private var highlighted: AttributedString {
+        Self.highlight(windowText, tokens: tokens)
+    }
+
+    static func highlight(_ text: String, tokens: [String]) -> AttributedString {
+        var attr = AttributedString(text)
+        let lower = text.lowercased()
+        for token in tokens where !token.isEmpty {
+            var start = lower.startIndex
+            while let r = lower.range(of: token, range: start..<lower.endIndex) {
+                let lo = lower.distance(from: lower.startIndex, to: r.lowerBound)
+                let hi = lower.distance(from: lower.startIndex, to: r.upperBound)
+                let aLo = attr.index(attr.startIndex, offsetByCharacters: lo)
+                let aHi = attr.index(attr.startIndex, offsetByCharacters: hi)
+                attr[aLo..<aHi].backgroundColor = Theme.highlight
+                start = r.upperBound
+            }
+        }
+        return attr
+    }
+}
+
 struct SearchResultRow: View {
     let hit: SearchHit
     let tokens: [String]
@@ -326,14 +411,17 @@ struct SearchResultRow: View {
     @Environment(\.s) private var s
 
     var body: some View {
+        // With prompt children underneath, the parent row is the session itself:
+        // its title on top, project below. Otherwise the match snippet leads.
+        let asTree = !hit.prompts.isEmpty
         VStack(alignment: .leading, spacing: s(5)) {
-            Text(highlighted)
-                .font(.system(size: 12.5 * scale)).lineLimit(2)
+            Text(asTree ? PromptResultRow.highlight(AutoTitle.displayTitle(hit.meta), tokens: tokens) : highlighted)
+                .font(.system(size: 12.5 * scale, weight: asTree ? .medium : .regular)).lineLimit(2)
                 .foregroundStyle(isSelected ? Color.white : Color.primary)
             HStack(spacing: s(6)) {
                 RoundedRectangle(cornerRadius: s(2))
                     .fill(Theme.dotColor(for: hit.meta.projectPath)).frame(width: s(7), height: s(7))
-                Text("\(hit.meta.projectLabel) · \(AutoTitle.displayTitle(hit.meta))")
+                Text(asTree ? hit.meta.projectLabel : "\(hit.meta.projectLabel) · \(AutoTitle.displayTitle(hit.meta))")
                     .font(.system(size: 11.5 * scale))
                     .foregroundStyle(isSelected ? Color.white.opacity(0.8) : Color.secondary)
                     .lineLimit(1)

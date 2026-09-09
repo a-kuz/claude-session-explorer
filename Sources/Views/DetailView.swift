@@ -61,8 +61,7 @@ struct DetailView: View {
                         fontTick: model.fontTick
                     )
                 } else {
-                    ClaudeBurstView()
-                        .frame(width: 88, height: 88)
+                    ProgressView().controlSize(.large)
                         .frame(maxWidth: .infinity).padding(.top, 40)
                         .conversationRow()
                 }
