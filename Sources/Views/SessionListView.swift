@@ -78,16 +78,12 @@ struct SessionListView: View {
                                     .listRowBackground(rowBackground(selected))
                                 // Matched prompts as children of the session row;
                                 // a click opens the session at that prompt.
-                                ForEach(Array(hit.prompts.prefix(promptRowLimit).enumerated()), id: \.offset) { i, p in
-                                    PromptResultRow(prompt: p, tokens: model.searchTokens)
-                                        .contentShape(Rectangle())
-                                        .onTapGesture { model.openPrompt(sessionID: hit.meta.id, uuid: p.uuid) }
-                                        // Not a selectable row: a unique tag keeps List
-                                        // identity apart from the session rows and from
-                                        // other sessions' children.
-                                        .tag("\(hit.meta.id)#prompt\(i)")
-                                        .selectionDisabled()
-                                        .listRowBackground(Color.clear)
+                                ForEach(Array(hit.prompts.prefix(promptRowLimit).enumerated()), id: \.offset) { _, p in
+                                    let tag = AppModel.promptTag(sessionID: hit.meta.id, uuid: p.uuid)
+                                    let psel = model.listSelection.contains(tag)
+                                    PromptResultRow(prompt: p, tokens: model.searchTokens, isSelected: psel)
+                                        .tag(tag)
+                                        .listRowBackground(rowBackground(psel))
                                         .listRowSeparator(.hidden)
                                 }
                                 if hit.prompts.count > promptRowLimit {
@@ -346,6 +342,7 @@ private let promptRowLimit = 8
 struct PromptResultRow: View {
     let prompt: IndexedPrompt
     let tokens: [String]
+    var isSelected: Bool = false
     @Environment(\.uiScale) private var scale
     @Environment(\.s) private var s
 
@@ -353,11 +350,11 @@ struct PromptResultRow: View {
         HStack(alignment: .top, spacing: s(6)) {
             Image(systemName: "arrow.turn.down.right")
                 .font(.system(size: 9 * scale, weight: .semibold))
-                .foregroundStyle(Theme.tertiaryText)
+                .foregroundStyle(isSelected ? Color.white.opacity(0.7) : Theme.tertiaryText)
                 .padding(.top, s(3))
             Text(highlighted)
                 .font(.system(size: 12 * scale)).lineLimit(2)
-                .foregroundStyle(Color.primary.opacity(0.85))
+                .foregroundStyle(isSelected ? Color.white : Color.primary.opacity(0.85))
         }
         .padding(.leading, s(14))
         .padding(.vertical, s(1))
