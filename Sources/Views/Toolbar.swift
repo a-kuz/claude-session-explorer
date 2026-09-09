@@ -89,9 +89,21 @@ struct ToolbarSearchField: View {
             )
             .frame(height: 18)
             .frame(maxWidth: .infinity)
+            if active {
+                // Where to match: indexed prompts (instant) or whole transcripts.
+                Picker("", selection: $model.searchIn) {
+                    Text("Prompts").tag(AppModel.SearchIn.prompts)
+                    Text("All").tag(AppModel.SearchIn.everything)
+                }
+                .pickerStyle(.segmented)
+                .controlSize(.mini)
+                .labelsHidden()
+                .fixedSize()
+                .help("Search in user prompts only (instant) or in whole transcripts")
+            }
             if active, !model.query.isEmpty {
                 if model.searching {
-                    ClaudeBurstView(options: .init(zoom: 1.5))
+                    ProgressView().controlSize(.small)
                         .frame(width: 20, height: 20)
                 }
                 // In-conversation match counter "N/total" + prev/next chevrons,
@@ -141,7 +153,7 @@ struct ToolbarSearchField: View {
             }
         }
         // Narrow at rest, grows smoothly when focused (or while a query is set).
-        .frame(width: active ? 360 : 220)
+        .frame(width: active ? 440 : 220)
         .animation(.easeOut(duration: 0.22), value: active)
     }
 }

@@ -116,7 +116,11 @@ struct OutlineView: View {
     /// entries (empty NSImage) are skipped; up to 4 shown, the rest as "+N".
     @ViewBuilder
     private func thumbnails(_ turn: DialogTurn) -> some View {
-        if turn.imageCount > 0, turn.imageStartIndex >= 0, !model.dialogImages.isEmpty {
+        // `dialogImages` and `turns` are loaded by separate tasks, so during a
+        // session switch the images may still belong to the previous session
+        // (fewer entries than this turn expects) — clamp, never assume.
+        if turn.imageCount > 0, turn.imageStartIndex >= 0,
+           turn.imageStartIndex < model.dialogImages.count {
             let start = turn.imageStartIndex
             let end = min(start + turn.imageCount, model.dialogImages.count)
             let shown = Array(start..<end).filter { model.dialogImages[$0].size.width > 1 }.prefix(4)

@@ -82,6 +82,12 @@ final class AppModel: ObservableObject {
     func setAir(_ value: CGFloat) { air = min(40, max(8, value.rounded())) }
 
     // Search
+    /// Where the query is matched: indexed user prompts only (instant, results
+    /// as session → prompt tree) or the whole transcript (streaming file scan).
+    enum SearchIn: String { case prompts, everything }
+    @Published var searchIn: SearchIn = .prompts {
+        didSet { if searchIn != oldValue { persistUIState(); recomputeHits(instant: true) } }
+    }
     @Published var query: String = "" { didSet { onQueryChanged() } }
     @Published private(set) var hits: [SearchHit] = []
     @Published private(set) var searching = false
@@ -310,7 +316,7 @@ final class AppModel: ObservableObject {
     private var watcher: FolderWatcher?
     private let store = Store()
     /// Derived-metadata schema version; bump to force recompute of cached rows.
-    static let metaSchemaVersion = 4  // v4: mid-turn prompts (queued_command attachments) counted
+    static let metaSchemaVersion = 5  // v5: user prompts written to the prompt index
     /// Last opened session id, restored on next launch.
     private var lastSelectedID: String?
     private var didRestore = false
@@ -347,6 +353,7 @@ final class AppModel: ObservableObject {
         static let monoFont = "ui.monoFont"         // conversation mono family
         static let copyToolLimit = "ui.copyToolOutputLimit" // 0 = no limit
         static let maxRender = "ui.maxRenderChars"          // 0 = no limit
+        static let searchIn = "ui.searchIn"                 // prompts|everything
     }
 
     private func restoreUIState() {
@@ -379,6 +386,7 @@ final class AppModel: ObservableObject {
         monoFont = d.string(forKey: K.monoFont) ?? ""
         copyToolOutputLimit = max(0, d.integer(forKey: K.copyToolLimit))
         if d.object(forKey: K.maxRender) != nil { maxRenderChars = max(0, d.integer(forKey: K.maxRender)) }
+        if let v = d.string(forKey: K.searchIn), let m = SearchIn(rawValue: v) { searchIn = m }
         MessageContent.maxRenderChars = maxRenderChars
         OpenSession.terminal = terminalApp
         OpenSession.claudePathOverride = claudePath
@@ -429,6 +437,7 @@ final class AppModel: ObservableObject {
         d.set(monoFont, forKey: K.monoFont)
         d.set(copyToolOutputLimit, forKey: K.copyToolLimit)
         d.set(maxRenderChars, forKey: K.maxRender)
+        d.set(searchIn.rawValue, forKey: K.searchIn)
         d.set(selectedID, forKey: K.selected)
     }
 
@@ -444,8 +453,15 @@ final class AppModel: ObservableObject {
             recomputeHits(instant: true)
             if selectedID == nil { selectedID = defaultSelection() }
         }
-        // 2) Background sync: parse only new/changed tails, update cache + UI.
+        // 2) Prompt index into memory, then background sync: parse only
+        //    new/changed tails, update cache + index + UI.
         Task.detached(priority: .userInitiated) { [weak self] in
+            PromptIndex.shared.load()
+            await MainActor.run { [weak self] in
+                guard let self, !self.query.isEmpty else { return }
+                self.lastSearchedQuery = ""   // rerun the instant tier over the loaded index
+                self.recomputeHits(instant: true)
+            }
             await self?.sync(initial: cached.isEmpty)
             await MainActor.run { self?.startWatching() }
         }
@@ -503,9 +519,11 @@ final class AppModel: ObservableObject {
                                                   fromOffset: UInt64(rec.parsedOffset)) {
                 meta = upd.meta
                 newOffset = Int(upd.newOffset)
-            } else {
+                PromptIndex.shared.append(upd.prompts, to: id)
+            } else if let cold = Loader.parseSessionMetaWithPrompts(path) {
                 // Cold parse: new file, shrunk/rotated file, or a schema bump.
-                meta = Loader.parseSessionMeta(path)
+                meta = cold.meta
+                PromptIndex.shared.replace(cold.prompts, for: id)
             }
             guard let meta else { continue }
             store.upsert(meta: meta, offset: newOffset, fileMtime: mtime,
@@ -530,7 +548,10 @@ final class AppModel: ObservableObject {
 
         // Remove records for deleted files.
         let live = Set(files.map { ($0 as NSString).lastPathComponent.replacingOccurrences(of: ".jsonl", with: "") })
-        for r in existing where !live.contains(r.id) { ctx.delete(r); dirty = true }
+        for r in existing where !live.contains(r.id) {
+            ctx.delete(r); dirty = true
+            PromptIndex.shared.remove(r.id)
+        }
 
         if dirty || sinceSave > 0 { try? ctx.save() }
 
@@ -827,12 +848,26 @@ final class AppModel: ObservableObject {
         searchTask?.cancel()
         let candidates = candidatesForFilter()
         let q = query
+        let promptsOnly = searchIn == .prompts
+        let queryChanged = q != lastSearchedQuery
+        lastSearchedQuery = q
 
-        // Instant cheap tier on the main actor.
-        let cheap = Search.searchCheap(candidates, q)
-        self.hits = cheap.sorted { $0.meta.mtime > $1.meta.mtime }
+        // Instant cheap tier on the main actor. For the same query with a new
+        // candidate set (background sync, scope/project change) the deep hits
+        // already found stay in place, rebased onto the fresh metas — the deep
+        // pass below only refines them (and resumes per-file from its cache).
+        let cheap = Search.searchCheap(candidates, q, promptsOnly: promptsOnly)
+        var merged: [String: SearchHit] = [:]
+        for h in cheap { merged[h.id] = h }
+        if !queryChanged && !promptsOnly {
+            let byId = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
+            for h in hits where merged[h.id] == nil {
+                if let m = byId[h.id] { merged[h.id] = SearchHit(meta: m, score: h.score, snippet: h.snippet) }
+            }
+        }
+        self.hits = merged.values.sorted { $0.meta.mtime > $1.meta.mtime }
 
-        if q.trimmingCharacters(in: .whitespaces).isEmpty { searching = false; return }
+        if promptsOnly || q.trimmingCharacters(in: .whitespaces).isEmpty { searching = false; return }
 
         // Deep tier off-thread, merged in.
         searching = true
@@ -840,20 +875,27 @@ final class AppModel: ObservableObject {
         let token = UUID()
         currentSearchToken = token
         searchTask = Task.detached(priority: .userInitiated) { [weak self] in
-            // Debounce: don't re-read every file on each keystroke. Wait for a
-            // typing pause; a newer keystroke cancels this task first.
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            if Task.isCancelled { return }
+            // Debounce typing only: don't re-read files on each keystroke. A
+            // newer keystroke cancels this task first.
+            if queryChanged {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                if Task.isCancelled { return }
+            }
             let chunkSize = 40
             var accumulated: [SearchHit] = []
+            // Hits for sessions the deep pass hasn't reached yet (cheap matches
+            // and previously found deep hits), so they don't vanish mid-pass.
+            var rest = merged
             var i = 0
             while i < snapshot.count {
                 if Task.isCancelled { return }
                 let end = min(i + chunkSize, snapshot.count)
                 let chunk = Array(snapshot[i..<end])
                 let part = Search.searchDeep(chunk, q, isCancelled: { Task.isCancelled })
+                if Task.isCancelled { return }
+                for m in chunk { rest.removeValue(forKey: m.id) }
                 accumulated.append(contentsOf: part)
-                let sorted = accumulated.sorted { $0.meta.mtime > $1.meta.mtime }
+                let sorted = (accumulated + rest.values).sorted { $0.meta.mtime > $1.meta.mtime }
                 let done = end >= snapshot.count
                 await MainActor.run { [weak self] in
                     guard let self, self.currentSearchToken == token else { return }
@@ -868,6 +910,7 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private var lastSearchedQuery = ""
     private var currentSearchToken: UUID?
 
     var searchTokens: [String] {
@@ -969,6 +1012,14 @@ final class AppModel: ObservableObject {
             turns = builtTurns
             blocks = builtBlocks   // didSet → rebuildNavCache
             recomputeMatches()
+        }
+        if let target = pendingJumpID {
+            pendingJumpID = nil
+            if blockIndexByID[target] != nil {
+                if let idx = promptIndexByID[target] { turnIndex = idx }
+                requestScroll(to: target, instant: true)
+                return
+            }
         }
         if searchTokens.isEmpty {
             turnIndex = max(0, userTurnIDs.count - 1)
@@ -1187,6 +1238,20 @@ final class AppModel: ObservableObject {
     func blockIndex(of id: String?) -> Int? {
         guard let id else { return nil }
         return blockIndexByID[id]
+    }
+
+    /// Block to land on once the dialog of the session being opened is built
+    /// (a prompt row clicked in the search results).
+    private var pendingJumpID: String?
+
+    /// Open a session at a specific prompt (its jsonl uuid = block id).
+    func openPrompt(sessionID: String, uuid: String) {
+        if selectedID == sessionID {
+            if blockIndexByID[uuid] != nil { jumpToTurn(uuid) }
+            return
+        }
+        pendingJumpID = uuid.isEmpty ? nil : uuid
+        selectedID = sessionID
     }
 
     /// Jump straight to a block (from the outline).
@@ -1843,7 +1908,8 @@ final class AppModel: ObservableObject {
     /// an in-place edit: the stored parsedOffset points into the old byte
     /// layout, so the incremental tail path must not be trusted for this file.
     nonisolated private func reindexFile(_ path: String) async {
-        guard let meta = Loader.parseSessionMeta(path) else { return }
+        guard let (meta, prompts) = Loader.parseSessionMetaWithPrompts(path) else { return }
+        PromptIndex.shared.replace(prompts, for: meta.id)
         let ctx = ModelContext(store.container)
         let mtime = Loader.fileMtime(path)
         let size = Int(Loader.fileLength(path))
@@ -1895,6 +1961,7 @@ final class AppModel: ObservableObject {
     /// Drop the persistent metadata cache and re-parse every session from jsonl.
     func resetCache() {
         store.deleteAllCached()
+        PromptIndex.shared.removeAll()
         allSessions = []
         loading = true
         recomputeHits(instant: true)

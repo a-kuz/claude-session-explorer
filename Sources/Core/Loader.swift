@@ -135,6 +135,9 @@ enum Loader {
         var userTurnCount = 0
         var model: String?
         var parentSessionId: String?
+        /// User prompts seen by THIS pass (never seeded from a cached row) —
+        /// full text, for the persistent prompt index.
+        var newPrompts: [IndexedPrompt] = []
 
         init(id: String) { self.id = id }
 
@@ -191,12 +194,14 @@ enum Loader {
                         return
                     }
                     let raw = MessageContent.contentToText(c)
-                    let text = MessageContent.oneLine(MessageContent.stripNoise(raw))
+                    let full = MessageContent.oneLine(MessageContent.stripNoise(raw), max: .max)
+                    let text = MessageContent.oneLine(full)
                     if MessageContent.isMeaningfulUserText(text) {
                         userTurnCount += 1
                         if firstUserText.isEmpty { firstUserText = text }
                         lastUserText = text
                         if let ts = ts { lastUserTimestamp = ts }
+                        newPrompts.append(IndexedPrompt(uuid: (rec["uuid"] as? String) ?? "", text: full))
                     }
                 }
                 if cwd == nil, let c = rec["cwd"] as? String { cwd = c }
@@ -210,12 +215,14 @@ enum Loader {
                         if firstTimestamp == nil { firstTimestamp = ts }
                     }
                     let raw = MessageContent.contentToText(att["prompt"])
-                    let text = MessageContent.oneLine(MessageContent.stripNoise(raw))
+                    let full = MessageContent.oneLine(MessageContent.stripNoise(raw), max: .max)
+                    let text = MessageContent.oneLine(full)
                     if MessageContent.isMeaningfulUserText(text) {
                         userTurnCount += 1
                         if firstUserText.isEmpty { firstUserText = text }
                         lastUserText = text
                         if let ts = ts { lastUserTimestamp = ts }
+                        newPrompts.append(IndexedPrompt(uuid: (rec["uuid"] as? String) ?? "", text: full))
                     }
                 }
                 if cwd == nil, let c = rec["cwd"] as? String { cwd = c }
@@ -256,6 +263,12 @@ enum Loader {
 
     /// Parse a single session file into metadata (cold/full scan).
     static func parseSessionMeta(_ filePath: String) -> SessionMeta? {
+        parseSessionMetaWithPrompts(filePath)?.meta
+    }
+
+    /// Cold parse that also returns every user prompt in the file, for the
+    /// prompt index (which the cold path replaces wholesale).
+    static func parseSessionMetaWithPrompts(_ filePath: String) -> (meta: SessionMeta, prompts: [IndexedPrompt])? {
         guard let content = try? String(contentsOfFile: filePath, encoding: .utf8) else { return nil }
         let attrs = try? FileManager.default.attributesOfItem(atPath: filePath)
         let fileMtime = (attrs?[.modificationDate] as? Date) ?? Date()
@@ -268,7 +281,8 @@ enum Loader {
             guard let rec = parseLine(line) else { return }
             acc.consume(rec)
         }
-        return acc.finish(filePath: filePath, byteSize: byteSize, fileMtime: fileMtime)
+        guard let meta = acc.finish(filePath: filePath, byteSize: byteSize, fileMtime: fileMtime) else { return nil }
+        return (meta, acc.newPrompts)
     }
 
     /// Incrementally update a session's metadata by reading ONLY the appended tail
@@ -277,14 +291,14 @@ enum Loader {
     /// and fold in just the new lines. Returns nil if the file shrank/rotated
     /// (caller must fall back to a full `parseSessionMeta`) or vanished.
     static func updateSessionMeta(prev: SessionMeta, filePath: String, fromOffset: UInt64)
-        -> (meta: SessionMeta, newOffset: UInt64, fileMtime: Date)? {
+        -> (meta: SessionMeta, newOffset: UInt64, fileMtime: Date, prompts: [IndexedPrompt])? {
         guard let handle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: filePath)) else { return nil }
         defer { try? handle.close() }
         let end = (try? handle.seekToEnd()) ?? 0
         if end < fromOffset { return nil }                 // shrank/rotated → caller re-parses
         let fileMtime = fileMtime(filePath)
         if end == fromOffset {                             // mtime touched but no new bytes
-            return (prev, end, fileMtime)
+            return (prev, end, fileMtime, [])
         }
         try? handle.seek(toOffset: fromOffset)
         let data = (try? handle.readToEnd()) ?? Data()
@@ -297,7 +311,7 @@ enum Loader {
             acc.consume(rec)
         }
         guard let meta = acc.finish(filePath: filePath, byteSize: Int(end), fileMtime: fileMtime) else { return nil }
-        return (meta, end, fileMtime)
+        return (meta, end, fileMtime, acc.newPrompts)
     }
 
     /// List every session jsonl file path under the projects dir.
@@ -634,25 +648,5 @@ enum Loader {
         dialogCache.removeValue(forKey: id)
         dialogLRU.removeAll { $0 == id }
         cacheLock.unlock()
-    }
-
-    /// Build the searchable text blob for a session TRANSIENTLY: read the file,
-    /// produce a lowercased blob, and let it deallocate. We deliberately do NOT
-    /// retain it (neither on `meta` nor in `dialogCache`) — caching every
-    /// session's full dialog text across keystrokes was a multi-GB memory leak.
-    static func buildSearchBlob(_ meta: SessionMeta) -> String {
-        guard let content = try? String(contentsOfFile: meta.filePath, encoding: .utf8) else {
-            return "\(meta.title ?? "")\n\(meta.projectLabel)\n\(meta.lastUserText)".lowercased()
-        }
-        // Cheap substring scan over raw jsonl prose — good enough for matching,
-        // and avoids building/holding a full parsed dialog.
-        var parts = [meta.title ?? "", meta.projectLabel, meta.projectPath]
-        content.enumerateLines { line, _ in
-            // Only index human-readable text fields, not the whole jsonl noise.
-            if line.contains("\"text\"") || line.contains("\"content\"") || line.contains("\"prompt\"") {
-                parts.append(line)
-            }
-        }
-        return parts.joined(separator: "\n").lowercased()
     }
 }
