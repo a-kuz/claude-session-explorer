@@ -664,10 +664,19 @@ final class AppModel: ObservableObject {
         guard let meta = selectedMeta else { return }
         let path = meta.filePath
         let fromOffset = dialogOffset
+        let base = dialogMessages
         Task.detached(priority: .utility) {
             guard let tail = Loader.loadDialogTail(path, fromOffset: fromOffset) else { return }
+            // The merged list and its branch graph are O(session) — built here,
+            // off the main thread, from the snapshot this reader started with.
+            let all = tail.truncated || tail.messages.isEmpty ? base : base + tail.messages
+            let graph = tail.truncated || tail.messages.isEmpty ? nil : BranchGraph.build(from: all)
             await MainActor.run {
                 guard self.selectedID == meta.id else { return }
+                // Two refreshes dispatched before either landed read the SAME
+                // tail; the second one would append it twice. Only the reader
+                // that started at the current offset may apply.
+                guard self.dialogOffset == fromOffset else { return }
                 if tail.truncated {
                     // File rotated/shrank — fall back to a full reload.
                     let d = Loader.loadDialog(path)
@@ -682,13 +691,13 @@ final class AppModel: ObservableObject {
                 guard !tail.messages.isEmpty else {
                     self.dialogOffset = tail.newOffset; return
                 }
-                self.dialogMessages.append(contentsOf: tail.messages)
+                self.dialogMessages = all
                 self.dialogOffset = tail.newOffset
-                self.dialog = SessionDialog(id: meta.id, messages: self.dialogMessages)
-                // A regenerated tail can append a new branch, so re-derive the
-                // graph. Stable ids mean unchanged turns keep identity, so only
-                // the new/last turn(s) actually re-render.
-                self.branchGraph = BranchGraph.build(from: self.dialogMessages)
+                self.dialog = SessionDialog(id: meta.id, messages: all)
+                // A regenerated tail can append a new branch, so the graph was
+                // re-derived above. Stable ids mean unchanged turns keep
+                // identity, so only the new/last turn(s) actually re-render.
+                if let graph { self.branchGraph = graph }
                 self.rebuildTurnsAppending()
             }
         }
