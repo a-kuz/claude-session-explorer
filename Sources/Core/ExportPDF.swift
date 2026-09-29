@@ -141,6 +141,9 @@ enum ExportPDF {
         if !turn.segments.isEmpty {
             for seg in turn.segments {
                 switch seg {
+                case .thinking(_, let text):
+                    out.append(inline("Thinking\n" + text, font: prose(9), color: secondary,
+                                      style: para(spacing: 5, lineSpacing: 2.5)))
                 case .prose(_, let mdBlocks):
                     for b in mdBlocks { appendMarkdown(b, to: out) }
                 case .tool(let tool):

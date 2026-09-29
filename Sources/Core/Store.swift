@@ -116,6 +116,7 @@ extension DialogMessage {
         let pieces: [ContentPiece] = (s.pieces ?? []).compactMap { p in
             switch p.kind {
             case "t": return p.text.map { .text($0) }
+            case "thinking": return p.text.map { .thinking($0) }
             case "u": return p.tool.map { .tool($0.toolUse) }
             default: return nil
             }
@@ -136,6 +137,7 @@ extension DialogMessage {
     var stored: StoredMessage {
         let sp: [StoredPiece] = pieces.map { p in
             switch p {
+            case .thinking(let t): return StoredPiece(kind: "thinking", text: t, tool: nil)
             case .text(let t): return StoredPiece(kind: "t", text: t, tool: nil)
             case .tool(let t): return StoredPiece(kind: "u", text: nil, tool: StoredTool(t))
             }

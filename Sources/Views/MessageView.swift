@@ -3,6 +3,7 @@ import SwiftUI
 /// A render group derived from a turn's ordered segments: a prose run, a run of
 /// adjacent tool calls (collapsed into one strip), or an AskUserQuestion card.
 enum SegmentGroup: Identifiable {
+    case thinking(id: String, text: String)
     case prose(id: String, blocks: [MarkdownBlock])
     case tools(id: String, [ToolUse])
     case ask(ToolUse)
@@ -10,6 +11,7 @@ enum SegmentGroup: Identifiable {
 
     var id: String {
         switch self {
+        case .thinking(let id, _): return "thinking-\(id)"
         case .prose(let id, _): return id
         case .tools(let id, _): return id
         case .ask(let t): return "ask-\(t.id.uuidString)"
@@ -144,6 +146,8 @@ struct TurnView: View {
         var out: [SegmentGroup] = []
         for seg in turn.segments {
             switch seg {
+            case .thinking(let id, let text):
+                out.append(.thinking(id: id, text: text))
             case .prose(let id, let blocks):
                 out.append(.prose(id: id, blocks: blocks))
             case .tool(let t):
@@ -176,6 +180,8 @@ struct TurnView: View {
             } else {
                 ForEach(groupedSegments) { group in
                     switch group {
+                    case .thinking(_, let text):
+                        ThinkingView(text: text)
                     case .prose(_, let blocks):
                         VStack(alignment: .leading, spacing: s(10)) {
                             ForEach(blocks) { block in
@@ -196,6 +202,53 @@ struct TurnView: View {
             }
             attachmentImages
         }
+    }
+}
+
+/// Reasoning stays in sequence, but only lays out its text when opened.
+private struct ThinkingView: View {
+    let text: String
+    @State private var isExpanded = false
+    @State private var showFullText = false
+    @Environment(\.uiScale) private var scale
+    @Environment(\.s) private var s
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: s(6)) {
+            Button {
+                isExpanded.toggle()
+            } label: {
+                HStack(spacing: s(6)) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    Label("Thinking", systemImage: "brain")
+                }
+                .font(.system(size: 12 * scale, weight: .medium))
+                .foregroundStyle(Theme.secondaryText)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            if isExpanded {
+                VStack(alignment: .leading, spacing: s(8)) {
+                    Text(verbatim: showFullText ? text : MessageContent.clampHead(text))
+                        .font(.system(size: 12 * scale))
+                        .foregroundStyle(Theme.secondaryText)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if !showFullText && MessageContent.isOversized(text) {
+                        Button("Показать полностью — может подвиснуть") {
+                            showFullText = true
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.accent)
+                    }
+                }
+                .padding(.top, s(6))
+            }
+        }
+        .padding(s(10))
+        .background(Theme.codeBg, in: RoundedRectangle(cornerRadius: s(8)))
     }
 }
 
