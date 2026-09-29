@@ -409,7 +409,7 @@ enum Loader {
             let text = MessageContent.contentToText(c).trimmingCharacters(in: .whitespacesAndNewlines)
             let ex = MessageContent.extractContent(c)
             for (k, v) in ex.resultsByID { resultsByID[k] = v }
-            if text.isEmpty && ex.toolUses.isEmpty && ex.toolResults.isEmpty && ex.imageCount == 0 { continue }
+            if text.isEmpty && ex.toolUses.isEmpty && ex.toolResults.isEmpty && ex.imageCount == 0 && ex.pieces.isEmpty { continue }
 
             let isToolOrMeta = type == "user" &&
                 ((rec["isMeta"] as? Bool) == true || MessageContent.isToolResultContent(c))

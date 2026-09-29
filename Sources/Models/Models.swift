@@ -26,6 +26,7 @@ struct ToolUse: Hashable, Identifiable {
 /// sequence they appeared — so tools render in place, not collected at the end.
 enum ContentPiece: Hashable {
     case text(String)
+    case thinking(String)
     case tool(ToolUse)
 }
 
@@ -256,16 +257,22 @@ struct BranchGraph {
 /// One ordered segment of a turn's body: a run of prose (already parsed to
 /// markdown blocks) or a single tool call — rendered in original sequence.
 enum TurnSegment: Identifiable, Equatable {
+    case thinking(id: String, text: String)
     case prose(id: String, blocks: [MarkdownBlock])
     case tool(ToolUse)
 
     var id: String {
         switch self {
+        case .thinking(let id, _): return "thinking-\(id)"
         case .prose(let id, _): return "p-\(id)"
         case .tool(let t): return "t-\(t.id.uuidString)"
         }
     }
-    static func == (l: TurnSegment, r: TurnSegment) -> Bool { l.id == r.id }
+    static func == (l: TurnSegment, r: TurnSegment) -> Bool {
+        guard l.id == r.id else { return false }
+        if case .thinking(_, let a) = l, case .thinking(_, let b) = r { return a == b }
+        return true
+    }
 }
 
 /// A visual turn: a run of adjacent messages from the same speaker, merged so
@@ -302,6 +309,7 @@ struct DialogTurn: Identifiable, Equatable {
     static func == (lhs: DialogTurn, rhs: DialogTurn) -> Bool {
         lhs.id == rhs.id && lhs.bodyChunks == rhs.bodyChunks
             && lhs.toolUses == rhs.toolUses && lhs.imageCount == rhs.imageCount
+            && lhs.segments == rhs.segments
     }
 
     /// Short one-line label for the outline / table of contents.
@@ -383,7 +391,7 @@ struct DialogTurn: Identifiable, Equatable {
                     case .text(let t):
                         let s = MessageContent.stripNoise(t)
                         if !s.isEmpty { orderedPieces.append(.text(s)) }
-                    case .tool:
+                    case .tool, .thinking:
                         orderedPieces.append(p)
                     }
                 }
@@ -427,7 +435,9 @@ struct DialogTurn: Identifiable, Equatable {
             // only the final prose chunk (the conclusion before the next prompt).
             var omitted = false
             if brief {
-                if !tools.isEmpty { omitted = true }
+                if !tools.isEmpty || orderedPieces.contains(where: {
+                    if case .thinking = $0 { return true }; return false
+                }) { omitted = true }
                 tools = []
                 images = asUser ? images : 0
                 if !asUser, chunks.count > 1 { omitted = true; chunks = [chunks.last!] }
@@ -441,6 +451,7 @@ struct DialogTurn: Identifiable, Equatable {
             var segments: [TurnSegment] = []
             var pendingText: [String] = []
             var proseCounter = 0
+            var thinkingCounter = 0
             func flushProse() {
                 guard !pendingText.isEmpty else { return }
                 let joined = pendingText.joined(separator: "\n\n")
@@ -452,12 +463,16 @@ struct DialogTurn: Identifiable, Equatable {
             for p in orderedPieces {
                 switch p {
                 case .text(let t): pendingText.append(t)
+                case .thinking(let text):
+                    flushProse()
+                    segments.append(.thinking(id: "\(starter.id)-\(thinkingCounter)", text: text))
+                    thinkingCounter += 1
                 case .tool(let tool): flushProse(); segments.append(.tool(tool))
                 }
             }
             flushProse()
 
-            if !chunks.isEmpty || !tools.isEmpty || images > 0 {
+            if !chunks.isEmpty || !tools.isEmpty || images > 0 || !segments.isEmpty {
                 // User: send time. Assistant: time of the final reply text.
                 let ts = asUser ? firstTimestamp : (lastProseTimestamp ?? firstTimestamp)
                 let body = chunks.joined(separator: "\n\n")

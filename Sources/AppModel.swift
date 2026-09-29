@@ -1330,6 +1330,8 @@ final class AppModel: ObservableObject {
         if !turn.segments.isEmpty {
             for seg in turn.segments {
                 switch seg {
+                case .thinking(_, let text):
+                    lines.append("[Thinking]\n\(text)")
                 case .prose(_, let blocks):
                     let t = blocks.map(\.plainText).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
                     if !t.isEmpty { lines.append(t) }

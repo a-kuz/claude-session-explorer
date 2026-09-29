@@ -199,7 +199,10 @@ enum MessageContent {
                 toolResults.append(txt)
                 if let rid = b["tool_use_id"] as? String { resultsByID[rid] = txt }
             case "thinking":
-                break
+                if let text = b["thinking"] as? String,
+                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    pieces.append(.thinking(text))
+                }
             default:
                 if let t = b["text"] as? String { handleText(t) }
             }
