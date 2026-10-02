@@ -53,33 +53,14 @@ enum OpenSession {
          .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    /// Absolute path to the `claude` binary, resolved once via the user's login
-    /// shell. Ghostty launches commands with `/bin/bash --noprofile --norc`, which
-    /// never reads the user's profiles — so the PATH that holds `claude` (often
-    /// `~/.local/bin`) is absent and a bare `claude` resolves to nothing. We look
-    /// it up in a login+interactive shell (which DOES source the profiles) and use
-    /// the absolute path in the launch command. Falls back to bare `claude`.
-    private static let resolvedClaudePath: String = {
-        let proc = Process()
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        proc.executableURL = URL(fileURLWithPath: shell)
-        proc.arguments = ["-ilc", "command -v claude"]
-        let outPipe = Pipe()
-        proc.standardOutput = outPipe
-        proc.standardError = Pipe()
-        do { try proc.run() } catch { return "claude" }
-        proc.waitUntilExit()
-        let out = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return (proc.terminationStatus == 0 && out.hasPrefix("/")) ? out : "claude"
-    }()
+    /// Command that starts Claude Code (Settings), e.g. `claude`, `ki` or
+    /// `claude --model opus`. It runs inside the user's interactive login shell,
+    /// so `.zshrc` functions and aliases apply. Empty → `claude`.
+    static var launchCommand: String = ""
 
-    /// User-configured absolute path to `claude` (Settings). Empty → auto-resolve.
-    static var claudePathOverride: String = ""
-
-    private static var claudePath: String {
-        let o = claudePathOverride.trimmingCharacters(in: .whitespacesAndNewlines)
-        return o.isEmpty ? resolvedClaudePath : o
+    private static var claudeCommand: String {
+        let c = launchCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        return c.isEmpty ? "claude" : c
     }
 
     /// Terminal chosen in Settings; drives which app `openInTerminal` drives.
@@ -93,7 +74,7 @@ enum OpenSession {
     /// CLAUDE_CODE_FORCE_SESSION_PERSISTENCE disables that suppression outright, so
     /// the resumed session is always saved regardless of how SessionManager itself
     /// was launched.
-    private static let envPrefix = "env CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 "
+    private static let envPrefix = "export CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1; "
 
     /// The user's login shell, e.g. `/bin/zsh`. Falls back to zsh.
     private static var loginShell: String {
@@ -105,8 +86,10 @@ enum OpenSession {
     /// via a bare, profile-less shell — `.zprofile`/`.zshrc` are never sourced, so
     /// PATH augmentations and shell-function tooling (nvm, cargo env, pyenv shims)
     /// are absent and the resumed `claude` "can't run anything". Re-running the
-    /// command through `$SHELL -ilc` sources those profiles first, then `exec`s
-    /// claude — identical to opening a tab by hand.
+    /// command through `$SHELL -ilc` sources those profiles first, then runs the
+    /// launch command — identical to typing it in a tab by hand. The inner command
+    /// is not `exec`ed: `exec` only takes binaries, and the launch command may be
+    /// a shell function.
     ///
     /// `leadingExec` controls whether the wrapper itself starts with `exec`.
     /// Terminal/iTerm receive this as a line typed into a shell, so `exec $SHELL …`
@@ -117,12 +100,12 @@ enum OpenSession {
     /// and the window dies instantly. For Ghostty the command must start with the
     /// shell binary, not `exec`.
     private static func wrapInLoginShell(_ inner: String, leadingExec: Bool = true) -> String {
-        "\(leadingExec ? "exec " : "")\(shq(loginShell)) -ilc \(shq("exec " + inner))"
+        "\(leadingExec ? "exec " : "")\(shq(loginShell)) -ilc \(shq(inner))"
     }
 
     /// cd into the project, then resume the exact session — inside a login shell.
     static func buildResumeCommand(_ meta: SessionMeta) -> String {
-        wrapInLoginShell("cd \(shq(meta.projectPath)) && \(envPrefix)\(shq(claudePath)) --resume \(shq(meta.id))")
+        wrapInLoginShell("cd \(shq(meta.projectPath)) && \(envPrefix)\(claudeCommand) --resume \(shq(meta.id))")
     }
 
     @discardableResult
@@ -166,7 +149,7 @@ enum OpenSession {
     @discardableResult
     private static func openInGhostty(_ meta: SessionMeta, displayTitle: String) -> OpenResult {
         let wd = asEscape(meta.projectPath)
-        let cmd = asEscape(wrapInLoginShell("\(envPrefix)\(shq(claudePath)) --resume \(shq(meta.id))", leadingExec: false))
+        let cmd = asEscape(wrapInLoginShell("\(envPrefix)\(claudeCommand) --resume \(shq(meta.id))", leadingExec: false))
         let title = asEscape(displayTitle)
 
         let script = """
