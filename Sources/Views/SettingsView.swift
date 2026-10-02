@@ -26,6 +26,9 @@ private struct TerminalSettings: View {
                     Text(app.label).tag(app)
                 }
             }
+            TextField("Launch command", text: $model.launchCommand, prompt: Text("claude"))
+            Text("Runs in your login shell, so .zshrc functions and aliases work. `--resume <id>` is appended.")
+                .font(.caption).foregroundStyle(.secondary)
         }
         .padding(20)
     }

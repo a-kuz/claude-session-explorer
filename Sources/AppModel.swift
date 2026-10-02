@@ -37,9 +37,9 @@ final class AppModel: ObservableObject {
     @Published var terminalApp: TerminalApp = .ghostty {
         didSet { OpenSession.terminal = terminalApp; persistUIState() }
     }
-    /// Absolute path to `claude`; empty = auto-resolve via login shell.
-    @Published var claudePath: String = "" {
-        didSet { OpenSession.claudePathOverride = claudePath; persistUIState() }
+    /// Command that starts Claude Code in the terminal; empty = `claude`.
+    @Published var launchCommand: String = "" {
+        didSet { OpenSession.launchCommand = launchCommand; persistUIState() }
     }
 
     /// Conversation prose font family ("" = system). Mono drives code/tools.
@@ -367,7 +367,7 @@ final class AppModel: ObservableObject {
         static let projects = "ui.projects"         // [String] selected project paths
         static let projectsCollapsed = "ui.projectsCollapsed" // [String] collapsed tree nodes
         static let terminal = "ui.terminal"         // ghostty|terminal|iterm
-        static let claudePath = "ui.claudePath"     // absolute path override
+        static let launchCommand = "ui.launchCommand"
         static let proseFont = "ui.proseFont"       // conversation prose family
         static let monoFont = "ui.monoFont"         // conversation mono family
         static let copyToolLimit = "ui.copyToolOutputLimit" // 0 = no limit
@@ -400,7 +400,7 @@ final class AppModel: ObservableObject {
         selectedProjectPaths = Set(d.stringArray(forKey: K.projects) ?? [])
         collapsedProjectPaths = Set(d.stringArray(forKey: K.projectsCollapsed) ?? [])
         if let t = d.string(forKey: K.terminal), let m = TerminalApp(rawValue: t) { terminalApp = m }
-        claudePath = d.string(forKey: K.claudePath) ?? ""
+        launchCommand = d.string(forKey: K.launchCommand) ?? ""
         proseFont = d.string(forKey: K.proseFont) ?? ""
         monoFont = d.string(forKey: K.monoFont) ?? ""
         copyToolOutputLimit = max(0, d.integer(forKey: K.copyToolLimit))
@@ -408,7 +408,7 @@ final class AppModel: ObservableObject {
         if let v = d.string(forKey: K.searchIn), let m = SearchIn(rawValue: v) { searchIn = m }
         MessageContent.maxRenderChars = maxRenderChars
         OpenSession.terminal = terminalApp
-        OpenSession.claudePathOverride = claudePath
+        OpenSession.launchCommand = launchCommand
         DialogFonts.proseFamily = proseFont
         DialogFonts.monoFamily = monoFont
         lastSelectedID = d.string(forKey: K.selected)
@@ -451,7 +451,7 @@ final class AppModel: ObservableObject {
         d.set(Array(selectedProjectPaths), forKey: K.projects)
         d.set(Array(collapsedProjectPaths), forKey: K.projectsCollapsed)
         d.set(terminalApp.rawValue, forKey: K.terminal)
-        d.set(claudePath, forKey: K.claudePath)
+        d.set(launchCommand, forKey: K.launchCommand)
         d.set(proseFont, forKey: K.proseFont)
         d.set(monoFont, forKey: K.monoFont)
         d.set(copyToolOutputLimit, forKey: K.copyToolLimit)
