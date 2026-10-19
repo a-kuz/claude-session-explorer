@@ -84,6 +84,11 @@ enum ExportPDF {
             for turn in block.turns {
                 if turn.isUserPrompt {
                     appendPrompt(turn, to: out)
+                } else if turn.isCompactSummary {
+                    out.append(inline("Context compacted\n", font: prose(9), color: secondary,
+                                      style: para(spacing: 5, lineSpacing: 2.5)))
+                    appendAssistantTurn(turn, to: out, toolOutputLimit: toolOutputLimit,
+                                        nextPrompt: nil)
                 } else {
                     appendAssistantTurn(turn, to: out, toolOutputLimit: toolOutputLimit,
                                         nextPrompt: nextPrompt)

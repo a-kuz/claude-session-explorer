@@ -66,7 +66,9 @@ struct TurnView: View {
     private var isUser: Bool { turn.role == .user }
 
     var body: some View {
-        if isUser {
+        if turn.isCompactSummary {
+            CompactSummaryView(turn: turn, tokens: tokens)
+        } else if isUser {
             // A user prompt renders as a section heading: an accent/grey rule down
             // the left, the prompt text at 15/600, the time to the right — no
             // avatar, no "You". (Matches the design mock.) Pasted images hang

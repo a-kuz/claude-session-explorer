@@ -335,7 +335,7 @@ final class AppModel: ObservableObject {
     private var watcher: FolderWatcher?
     private let store = Store()
     /// Derived-metadata schema version; bump to force recompute of cached rows.
-    static let metaSchemaVersion = 5  // v5: user prompts written to the prompt index
+    static let metaSchemaVersion = 6  // v6: compaction summaries aren't prompts
     /// Last opened session id, restored on next launch.
     private var lastSelectedID: String?
     private var didRestore = false
@@ -1309,7 +1309,8 @@ final class AppModel: ObservableObject {
         var out: [String] = []
         for block in chosen {
             for turn in block.turns {
-                var who = turn.role == .user ? "You" : "Claude"
+                var who = turn.isCompactSummary ? "Compact summary"
+                    : turn.role == .user ? "You" : "Claude"
                 if let ts = turn.timestamp { who += " · \(Format.longDateTime(ts))" }
                 let body = turnPlainText(turn, toolOutputLimit: toolOutputLimit)
                 guard !body.isEmpty else { continue }
