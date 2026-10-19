@@ -189,7 +189,8 @@ enum Loader {
                 }
                 if type == "user" {
                     let c = msg?["content"]
-                    if (rec["isMeta"] as? Bool) == true || MessageContent.isToolResultContent(c) {
+                    if (rec["isMeta"] as? Bool) == true || (rec["isCompactSummary"] as? Bool) == true
+                        || MessageContent.isToolResultContent(c) {
                         if cwd == nil, let cc = rec["cwd"] as? String { cwd = cc }
                         return
                     }
@@ -411,8 +412,10 @@ enum Loader {
             for (k, v) in ex.resultsByID { resultsByID[k] = v }
             if text.isEmpty && ex.toolUses.isEmpty && ex.toolResults.isEmpty && ex.imageCount == 0 && ex.pieces.isEmpty { continue }
 
+            let isCompactSummary = type == "user" && (rec["isCompactSummary"] as? Bool) == true
             let isToolOrMeta = type == "user" &&
-                ((rec["isMeta"] as? Bool) == true || MessageContent.isToolResultContent(c))
+                ((rec["isMeta"] as? Bool) == true || isCompactSummary
+                    || MessageContent.isToolResultContent(c))
 
             // Stable id from the record's uuid (append-only ⇒ never changes);
             // fall back to a positional id when absent.
@@ -434,7 +437,8 @@ enum Loader {
                 bodyText: ex.bodyText,
                 imageCount: ex.imageCount,
                 pieces: ex.pieces,
-                imagePaths: ex.imagePaths))
+                imagePaths: ex.imagePaths,
+                isCompactSummary: isCompactSummary))
         }
         // Link each tool call to its result (results arrive in later messages).
         func withOutput(_ t: ToolUse) -> ToolUse {

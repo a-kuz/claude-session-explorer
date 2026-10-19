@@ -62,6 +62,9 @@ struct DialogMessage: Identifiable {
     var pieces: [ContentPiece] = []
     /// Absolute paths of image attachments (loaded from disk for inline display).
     var imagePaths: [String] = []
+    /// The summary record written by context compaction (`isCompactSummary`):
+    /// a user-role record that isn't a prompt; `bodyText` holds the summary.
+    var isCompactSummary: Bool = false
 }
 
 /// Lightweight metadata for the session list — cheap to compute, no full parse.
@@ -301,6 +304,8 @@ struct DialogTurn: Identifiable, Equatable {
     var segments: [TurnSegment] = []
     /// Absolute paths of image attachments in this turn (loaded from disk).
     var imagePaths: [String] = []
+    /// A compaction summary turn: `bodyChunks`/`blocks` hold the summary text.
+    var isCompactSummary: Bool = false
 
     var bodyText: String { bodyChunks.joined(separator: "\n\n") }
 
@@ -361,6 +366,21 @@ struct DialogTurn: Identifiable, Equatable {
         var i = fromMessageIndex
         while i < messages.count {
             let starter = messages[i]
+            // A compaction summary is its own turn: it ends the Claude run
+            // before it and is rendered as a collapsed card, not as prose.
+            if starter.isCompactSummary {
+                imageCursor += starter.imageCount
+                let summary = starter.bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !summary.isEmpty {
+                    turns.append(DialogTurn(
+                        id: starter.id, role: .assistant, timestamp: starter.timestamp,
+                        bodyChunks: [summary], toolUses: [], imageCount: 0,
+                        imageStartIndex: -1, isUserPrompt: false, omitted: false,
+                        blocks: Markdown.parse(summary), isCompactSummary: true))
+                }
+                i += 1
+                continue
+            }
             let asUser = isRealUserPrompt(starter)
             let turnImageStart = imageCursor
 
@@ -424,7 +444,8 @@ struct DialogTurn: Identifiable, Equatable {
             } else {
                 // Assistant turn: swallow everything up to the next real prompt.
                 var j = i
-                while j < messages.count, !isRealUserPrompt(messages[j]) {
+                while j < messages.count, !isRealUserPrompt(messages[j]),
+                      !messages[j].isCompactSummary {
                     absorb(messages[j], asUserTurn: false)
                     j += 1
                 }
