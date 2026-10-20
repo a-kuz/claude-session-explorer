@@ -41,6 +41,11 @@ final class AppModel: ObservableObject {
     @Published var paletteGlobalHotkey: Bool = true {
         didSet { PalettePanel.setGlobalHotkey(enabled: paletteGlobalHotkey); persistUIState() }
     }
+    /// Start at login, hidden, and keep running without a window, so the
+    /// palette hotkey is always there. Backed by a LaunchAgent in the bundle.
+    @Published var loginAgent: Bool = LoginAgent.isEnabled {
+        didSet { if loginAgent != oldValue { loginAgent = LoginAgent.set(enabled: loginAgent) } }
+    }
     /// Command that starts Claude Code in the terminal; empty = `claude`.
     @Published var launchCommand: String = "" {
         didSet { OpenSession.launchCommand = launchCommand; persistUIState() }

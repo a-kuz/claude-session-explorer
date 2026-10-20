@@ -30,6 +30,9 @@ private struct TerminalSettings: View {
             Text("Runs in your login shell, so .zshrc functions and aliases work. `--resume <id>` is appended.")
                 .font(.caption).foregroundStyle(.secondary)
             Toggle("Jump palette on ⌃⌥Space from any app", isOn: $model.paletteGlobalHotkey)
+            Toggle("Start at login and keep running in the background", isOn: $model.loginAgent)
+            Text("Without this the hotkey works only while Session Explorer is open.")
+                .font(.caption).foregroundStyle(.secondary)
         }
         .padding(20)
     }

@@ -21,6 +21,13 @@ targets:
     platform: macOS
     sources:
       - path: Sources
+        excludes:
+          - LaunchAgents
+      - path: Sources/LaunchAgents/ai.enface.SessionExplorer.agent.plist
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchAgents
     info:
       path: Sources/Info.plist
       properties:
