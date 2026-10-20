@@ -459,12 +459,17 @@ struct DialogTurn: Identifiable, Equatable {
                 if !tools.isEmpty || orderedPieces.contains(where: {
                     if case .thinking = $0 { return true }; return false
                 }) { omitted = true }
-                tools = []
+                // Images Claude read stay visible: they are content, not machinery.
+                let imageReads = orderedPieces.compactMap { p -> ContentPiece? in
+                    if case .tool(let t) = p, t.imageFilePath != nil { return p }
+                    return nil
+                }
+                tools = tools.filter { $0.imageFilePath != nil }
                 images = asUser ? images : 0
                 if !asUser, chunks.count > 1 { omitted = true; chunks = [chunks.last!] }
                 // Brief: collapse to prose only (final chunk for assistant turns).
                 let proseOnly = chunks.joined(separator: "\n\n")
-                orderedPieces = proseOnly.isEmpty ? [] : [.text(proseOnly)]
+                orderedPieces = imageReads + (proseOnly.isEmpty ? [] : [.text(proseOnly)])
             }
 
             // Convert ordered pieces → segments: contiguous text runs become one

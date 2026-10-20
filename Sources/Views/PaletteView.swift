@@ -460,8 +460,8 @@ final class PalettePanel: NSObject, NSWindowDelegate {
         p.setFrame(target.insetBy(dx: target.width * 0.02, dy: target.height * 0.02), display: false)
         p.makeKeyAndOrderFront(nil)
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.16
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            ctx.duration = 0.22
+            ctx.timingFunction = Self.spring
             p.animator().alphaValue = 1
             p.animator().setFrame(target, display: true)
         }
@@ -480,9 +480,12 @@ final class PalettePanel: NSObject, NSWindowDelegate {
         guard let p = panel, p.isVisible else { return }
         UserDefaults.standard.set(NSStringFromPoint(NSPoint(x: p.frame.minX, y: p.frame.maxY)),
                                   forKey: Self.originKey)
+        let f = p.frame
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.1
+            ctx.duration = 0.13
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
             p.animator().alphaValue = 0
+            p.animator().setFrame(f.insetBy(dx: f.width * 0.015, dy: f.height * 0.015), display: true)
         }, completionHandler: {
             p.orderOut(nil)
             p.contentView = nil
@@ -510,6 +513,9 @@ final class PalettePanel: NSObject, NSWindowDelegate {
         override var canBecomeMain: Bool { false }
     }
 
+    /// Ease-out with a touch of overshoot, like the system's panel springs.
+    private static let spring = CAMediaTimingFunction(controlPoints: 0.2, 1.1, 0.3, 1.0)
+
     private static func size(rows: Int) -> NSSize {
         NSSize(width: PaletteView.previewWidth + PaletteView.listWidth + 1,
                height: PaletteView.height(forRows: rows))
@@ -525,8 +531,8 @@ final class PalettePanel: NSObject, NSWindowDelegate {
             f.origin.y += f.height - h
             f.size.height = h
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.18
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                ctx.duration = 0.32
+                ctx.timingFunction = Self.spring
                 p.animator().setFrame(f, display: true)
             }
         }

@@ -199,8 +199,8 @@ enum MessageContent {
                 toolResults.append(txt)
                 if let rid = b["tool_use_id"] as? String { resultsByID[rid] = txt }
             case "thinking":
-                if let text = b["thinking"] as? String,
-                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if let text = (b["thinking"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !text.isEmpty {
                     pieces.append(.thinking(text))
                 }
             default:
@@ -271,6 +271,7 @@ enum MessageContent {
             "<<autonomous-loop[^>]*>>",
             "\\[Image #\\d+\\]",
             "\\[Image: source: [^\\]]+\\]",
+            "\\[Image: original \\d+x\\d+, displayed at [^\\]]*\\]",
             "\\[image\\]", "\\[document\\]",
             "</?bash-input>",
         ]
