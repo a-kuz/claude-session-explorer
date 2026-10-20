@@ -37,6 +37,10 @@ final class AppModel: ObservableObject {
     @Published var terminalApp: TerminalApp = .ghostty {
         didSet { OpenSession.terminal = terminalApp; persistUIState() }
     }
+    /// ⌃⌥Space anywhere on the system opens the jump palette.
+    @Published var paletteGlobalHotkey: Bool = true {
+        didSet { PalettePanel.setGlobalHotkey(enabled: paletteGlobalHotkey); persistUIState() }
+    }
     /// Command that starts Claude Code in the terminal; empty = `claude`.
     @Published var launchCommand: String = "" {
         didSet { OpenSession.launchCommand = launchCommand; persistUIState() }
@@ -352,6 +356,7 @@ final class AppModel: ObservableObject {
 
     private enum K {
         static let sidebar = "ui.sidebarCollapsed"
+        static let paletteHotkey = "ui.paletteGlobalHotkey"
         static let listCollapsed = "ui.listCollapsed"
         static let outline = "ui.showOutline"
         static let brief = "ui.briefMode"
@@ -378,6 +383,7 @@ final class AppModel: ObservableObject {
     private func restoreUIState() {
         let d = UserDefaults.standard
         sidebarCollapsed = d.bool(forKey: K.sidebar)
+        if d.object(forKey: K.paletteHotkey) != nil { paletteGlobalHotkey = d.bool(forKey: K.paletteHotkey) }
         listCollapsed = d.bool(forKey: K.listCollapsed)
         if d.object(forKey: K.outline) != nil { showOutline = d.bool(forKey: K.outline) }
         briefMode = d.bool(forKey: K.brief)
@@ -449,6 +455,7 @@ final class AppModel: ObservableObject {
         }
         d.set(scopeStr, forKey: K.scope)
         d.set(Array(selectedProjectPaths), forKey: K.projects)
+        d.set(paletteGlobalHotkey, forKey: K.paletteHotkey)
         d.set(Array(collapsedProjectPaths), forKey: K.projectsCollapsed)
         d.set(terminalApp.rawValue, forKey: K.terminal)
         d.set(launchCommand, forKey: K.launchCommand)
@@ -463,6 +470,8 @@ final class AppModel: ObservableObject {
     // MARK: - Loading
 
     func load() {
+        PalettePanel.shared.configure(app: self)
+        PalettePanel.setGlobalHotkey(enabled: paletteGlobalHotkey)
         // 1) Instant first paint from the persistent cache.
         let cached = store.loadCachedMetas()
         if !cached.isEmpty {
@@ -1015,6 +1024,21 @@ final class AppModel: ObservableObject {
             }
         }
     }
+
+    /// Select a session from the jump palette. The row may be outside the
+    /// current scope/project filter or search: those are reset so it's visible.
+    func jumpToSession(_ id: String) {
+        if triageMode { exitTriage() }
+        if !filteredHits.contains(where: { $0.meta.id == id }) {
+            query = ""
+            scope = hidden.contains(id) ? .hidden : .all
+            selectedProjectPaths = []
+            recomputeHits(instant: true)
+        }
+        selectedID = id
+    }
+
+    func showPalette() { PalettePanel.shared.toggle() }
 
     func selectNext(_ delta: Int) {
         let list = filteredHits
@@ -1967,6 +1991,10 @@ final class AppModel: ObservableObject {
 
     func openInTerminal() {
         guard let meta = selectedMeta else { return }
+        openInTerminal(meta: meta)
+    }
+
+    func openInTerminal(meta: SessionMeta) {
         let title = AutoTitle.displayTitle(meta)
         Task.detached {
             let r = OpenSession.openInTerminal(meta, displayTitle: title)
