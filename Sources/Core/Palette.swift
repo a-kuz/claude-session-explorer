@@ -18,8 +18,8 @@ enum Palette {
     static let maxRows = 60
 
     /// Ranks library sessions and live processes against a free-text query.
-    /// Empty query: live processes first (waiting → busy → shell → idle), then
-    /// the library by recency. Otherwise every whitespace token must match the
+    /// Empty query: by recency of the last activity (prompt, reply, or a
+    /// status change of the running process). Otherwise every whitespace token must match the
     /// row (title, project, peer name, last prompt, id); the score prefers
     /// word-prefix hits in the title, then a fuzzy subsequence, then recency.
     static func rank(query: String, sessions: [SessionMeta],
@@ -33,7 +33,7 @@ enum Palette {
             let l = live[meta.id]
             if l != nil { seenLive.insert(meta.id) }
             let title = AutoTitle.displayTitle(meta)
-            let when = l?.updatedAt ?? meta.mtime
+            let when = [meta.mtime, meta.lastActivity ?? .distantPast, l?.updatedAt ?? .distantPast].max()!
             let fields = Fields(title: title, project: meta.projectLabel + " " + meta.projectPath,
                                 name: l?.name ?? "", body: meta.lastUserText, id: meta.id)
             guard let s = score(tokens, fields) else { continue }
@@ -55,17 +55,7 @@ enum Palette {
         }
 
         items.sort { a, b in
-            if tokens.isEmpty {
-                switch (a.live, b.live) {
-                case let (la?, lb?):
-                    if la.statusRank != lb.statusRank { return la.statusRank < lb.statusRank }
-                    return a.when > b.when
-                case (.some, .none): return true
-                case (.none, .some): return false
-                default: return a.when > b.when
-                }
-            }
-            if a.score != b.score { return a.score > b.score }
+            if !tokens.isEmpty, a.score != b.score { return a.score > b.score }
             return a.when > b.when
         }
         return Array(items.prefix(maxRows))
@@ -152,5 +142,56 @@ enum Palette {
         case "busy": return 2
         default: return 1.5
         }
+    }
+}
+
+// MARK: - Preview
+
+/// One compact line of the preview pane: who said it and the gist.
+struct PreviewMessage: Identifiable {
+    let id: String
+    let role: DialogMessage.Role
+    let text: String
+    /// Tool calls folded into `Read ×3 · Edit`.
+    let tools: String
+    let time: Date?
+    let isCompactSummary: Bool
+}
+
+extension Palette {
+    static let previewTailBytes: UInt64 = 400_000
+    static let previewMessages = 12
+    static let previewChars = 700
+
+    /// The end of a transcript, read from the file tail only (the first line
+    /// of the chunk is usually cut mid-record and is skipped by the parser).
+    static func loadPreview(_ meta: SessionMeta) -> [PreviewMessage] {
+        guard !meta.filePath.isEmpty else { return [] }
+        let len = Loader.fileLength(meta.filePath)
+        let from = len > previewTailBytes ? len - previewTailBytes : 0
+        guard let tail = Loader.loadDialogTail(meta.filePath, fromOffset: from) else { return [] }
+        let msgs = tail.messages.filter { !$0.isToolOrMeta || !$0.toolUses.isEmpty || $0.isCompactSummary }
+        return msgs.suffix(previewMessages).compactMap { m in
+            // Slash-command records and other harness wrappers still carry
+            // their tags in `bodyText`; the transcript view strips them too.
+            let body = (m.role == .user ? MessageContent.stripNoise(m.bodyText) : m.bodyText)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let tools = foldTools(m.toolUses)
+            if body.isEmpty && tools.isEmpty { return nil }
+            let text = body.count > previewChars ? String(body.prefix(previewChars)) + "…" : body
+            return PreviewMessage(id: m.id, role: m.role, text: text, tools: tools,
+                                  time: m.timestamp, isCompactSummary: m.isCompactSummary)
+        }
+    }
+
+    private static func foldTools(_ tools: [ToolUse]) -> String {
+        guard !tools.isEmpty else { return "" }
+        var order: [String] = []
+        var counts: [String: Int] = [:]
+        for t in tools {
+            if counts[t.name] == nil { order.append(t.name) }
+            counts[t.name, default: 0] += 1
+        }
+        return order.map { counts[$0]! > 1 ? "\($0) ×\(counts[$0]!)" : $0 }.joined(separator: " · ")
     }
 }
