@@ -71,6 +71,9 @@ struct AppCommands: Commands {
         }
 
         CommandMenu("Navigation") {
+            Button("Jump to Session…") { model.showPalette() }
+                .keyboardShortcut("k", modifiers: [.command])
+            Divider()
             Button("Next Session") { model.selectNext(1) }
                 .keyboardShortcut(.downArrow, modifiers: [.command])
             Button("Previous Session") { model.selectNext(-1) }

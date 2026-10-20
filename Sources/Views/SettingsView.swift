@@ -29,6 +29,7 @@ private struct TerminalSettings: View {
             TextField("Launch command", text: $model.launchCommand, prompt: Text("claude"))
             Text("Runs in your login shell, so .zshrc functions and aliases work. `--resume <id>` is appended.")
                 .font(.caption).foregroundStyle(.secondary)
+            Toggle("Jump palette on ⌃⌥Space from any app", isOn: $model.paletteGlobalHotkey)
         }
         .padding(20)
     }

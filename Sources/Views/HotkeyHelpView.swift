@@ -12,6 +12,8 @@ struct HotkeyHelpView: View {
 
     private let groups: [Group] = [
         Group(title: "Navigation", items: [
+            Item(keys: "⌘K", label: "Jump to session (palette)"),
+            Item(keys: "⌃⌥Space", label: "Jump palette from any app"),
             Item(keys: "⌘↓ / ⌘↑", label: "Next / previous session"),
             Item(keys: "⌘] / ⌘[", label: "Next / previous turn"),
             Item(keys: "⌘G / ⌘⇧G", label: "Next / previous match"),
