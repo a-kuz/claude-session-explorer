@@ -18,20 +18,23 @@ enum Palette {
     static let maxRows = 60
 
     /// Ranks library sessions and live processes against a free-text query.
-    /// Empty query: by recency of the last activity (prompt, reply, or a
-    /// status change of the running process). Otherwise every whitespace token must match the
+    /// Empty query: only the sessions that are generating right now, by recency
+    /// (`showAll` lifts that to every session). Otherwise every whitespace token must match the
     /// row (title, project, peer name, last prompt, id); the score prefers
     /// word-prefix hits in the title, then a fuzzy subsequence, then recency.
     static func rank(query: String, sessions: [SessionMeta],
-                     live: [String: LiveSession], now: Date = Date()) -> [PaletteItem] {
+                     live: [String: LiveSession], showAll: Bool = false,
+                     now: Date = Date()) -> [PaletteItem] {
         let tokens = query.lowercased()
             .split(whereSeparator: { $0.isWhitespace }).map(String.init)
         var items: [PaletteItem] = []
         var seenLive = Set<String>()
 
+        let busyOnly = tokens.isEmpty && !showAll
         for meta in sessions {
             let l = live[meta.id]
             if l != nil { seenLive.insert(meta.id) }
+            if busyOnly, l?.status != "busy" { continue }
             let title = AutoTitle.displayTitle(meta)
             let when = [meta.mtime, meta.lastActivity ?? .distantPast, l?.updatedAt ?? .distantPast].max()!
             let fields = Fields(title: title, project: meta.projectLabel + " " + meta.projectPath,
@@ -44,12 +47,12 @@ enum Palette {
                 score: s + recency(when, now: now) + (l.map { liveBonus($0) } ?? 0)))
         }
         // Processes whose session has no jsonl in the library yet (just started).
-        for (sid, l) in live where !seenLive.contains(sid) {
+        for (sid, l) in live where !seenLive.contains(sid) && (!busyOnly || l.status == "busy") {
             let label = (l.cwd as NSString).lastPathComponent
             let fields = Fields(title: l.name, project: label + " " + l.cwd, name: l.name, body: "", id: sid)
             guard let s = score(tokens, fields) else { continue }
             items.append(PaletteItem(
-                id: sid, meta: nil, live: l, title: l.name.isEmpty ? String(sid.prefix(8)) : l.name,
+                id: sid, meta: nil, live: l, title: label,
                 projectLabel: label, projectPath: l.cwd, subtitle: "running, no transcript yet",
                 when: l.updatedAt, score: s + recency(l.updatedAt, now: now) + liveBonus(l)))
         }
@@ -147,51 +150,32 @@ enum Palette {
 
 // MARK: - Preview
 
-/// One compact line of the preview pane: who said it and the gist.
-struct PreviewMessage: Identifiable {
-    let id: String
-    let role: DialogMessage.Role
-    let text: String
-    /// Tool calls folded into `Read ×3 · Edit`.
-    let tools: String
-    let time: Date?
-    let isCompactSummary: Bool
+/// The last block of a transcript, built by the same turn pipeline as the
+/// transcript view (brief mode): the prompt that led it and Claude's turns.
+struct PalettePreview {
+    let promptTurn: DialogTurn?
+    /// Fallback heading when the prompt lies before the chunk that was read.
+    let promptText: String
+    let responses: [DialogTurn]
 }
 
 extension Palette {
     static let previewTailBytes: UInt64 = 400_000
-    static let previewMessages = 12
-    static let previewChars = 700
 
-    /// The end of a transcript, read from the file tail only (the first line
-    /// of the chunk is usually cut mid-record and is skipped by the parser).
-    static func loadPreview(_ meta: SessionMeta) -> [PreviewMessage] {
-        guard !meta.filePath.isEmpty else { return [] }
+    /// Reads only the file tail; the first line of the chunk is usually cut
+    /// mid-record and is skipped by the parser.
+    static func loadPreview(_ meta: SessionMeta) -> PalettePreview? {
+        guard !meta.filePath.isEmpty else { return nil }
         let len = Loader.fileLength(meta.filePath)
         let from = len > previewTailBytes ? len - previewTailBytes : 0
-        guard let tail = Loader.loadDialogTail(meta.filePath, fromOffset: from) else { return [] }
-        let msgs = tail.messages.filter { !$0.isToolOrMeta || !$0.toolUses.isEmpty || $0.isCompactSummary }
-        return msgs.suffix(previewMessages).compactMap { m in
-            // Slash-command records and other harness wrappers still carry
-            // their tags in `bodyText`; the transcript view strips them too.
-            let body = (m.role == .user ? MessageContent.stripNoise(m.bodyText) : m.bodyText)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let tools = foldTools(m.toolUses)
-            if body.isEmpty && tools.isEmpty { return nil }
-            let text = body.count > previewChars ? String(body.prefix(previewChars)) + "…" : body
-            return PreviewMessage(id: m.id, role: m.role, text: text, tools: tools,
-                                  time: m.timestamp, isCompactSummary: m.isCompactSummary)
-        }
-    }
-
-    private static func foldTools(_ tools: [ToolUse]) -> String {
-        guard !tools.isEmpty else { return "" }
-        var order: [String] = []
-        var counts: [String: Int] = [:]
-        for t in tools {
-            if counts[t.name] == nil { order.append(t.name) }
-            counts[t.name, default: 0] += 1
-        }
-        return order.map { counts[$0]! > 1 ? "\($0) ×\(counts[$0]!)" : $0 }.joined(separator: " · ")
+        guard let tail = Loader.loadDialogTail(meta.filePath, fromOffset: from) else { return nil }
+        let turns = DialogTurn.build(from: tail.messages, brief: true)
+        let blocks = DialogBlock.build(from: turns)
+        guard let block = blocks.last(where: \.hasPrompt) ?? blocks.last else { return nil }
+        let prompt = block.promptTurn
+        return PalettePreview(
+            promptTurn: prompt,
+            promptText: prompt?.bodyText ?? meta.lastUserText,
+            responses: prompt == nil ? block.turns : Array(block.turns.dropFirst()))
     }
 }
