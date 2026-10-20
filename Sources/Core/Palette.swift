@@ -163,11 +163,11 @@ struct PalettePreview {
 }
 
 extension Palette {
-    static let previewTailSteps: [UInt64] = [400_000, 2_000_000, 8_000_000]
+    static let previewTailSteps: [UInt64] = [400_000, 2_000_000, 8_000_000, 32_000_000]
 
     /// Reads only the file tail; the first line of the chunk is usually cut
-    /// mid-record and is skipped by the parser. A tail made of tool output
-    /// alone yields no block, so the window widens a few steps before giving up.
+    /// mid-record and is skipped by the parser. The window widens in steps
+    /// until the last block comes with its prompt.
     static func loadPreview(_ meta: SessionMeta) -> PalettePreview? {
         guard !meta.filePath.isEmpty else { return nil }
         let len = Loader.fileLength(meta.filePath)
@@ -179,7 +179,9 @@ extension Palette {
             chunk = tail.text
             let blocks = DialogBlock.build(from: DialogTurn.build(from: tail.messages, brief: true))
             block = blocks.last(where: \.hasPrompt) ?? blocks.last
-            if block != nil || from == 0 { break }
+            // A prompt with a pasted image is one multi-megabyte line: keep
+            // widening until the block actually starts with its prompt.
+            if block?.hasPrompt == true || from == 0 { break }
         }
         guard let block else { return nil }
         let prompt = block.promptTurn
