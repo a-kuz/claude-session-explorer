@@ -162,7 +162,9 @@ struct PaletteView: View {
             listColumn
                 .frame(width: Self.listWidth)
         }
-        .frame(height: Self.height(forRows: palette.items.count))
+        // No fixed height: the panel animates its frame and the content
+        // follows it top-aligned, so the search field never slides off.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
             .stroke(Color.primary.opacity(0.12), lineWidth: 1))
