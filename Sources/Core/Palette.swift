@@ -160,18 +160,23 @@ struct PalettePreview {
 }
 
 extension Palette {
-    static let previewTailBytes: UInt64 = 400_000
+    static let previewTailSteps: [UInt64] = [400_000, 2_000_000, 8_000_000]
 
     /// Reads only the file tail; the first line of the chunk is usually cut
-    /// mid-record and is skipped by the parser.
+    /// mid-record and is skipped by the parser. A tail made of tool output
+    /// alone yields no block, so the window widens a few steps before giving up.
     static func loadPreview(_ meta: SessionMeta) -> PalettePreview? {
         guard !meta.filePath.isEmpty else { return nil }
         let len = Loader.fileLength(meta.filePath)
-        let from = len > previewTailBytes ? len - previewTailBytes : 0
-        guard let tail = Loader.loadDialogTail(meta.filePath, fromOffset: from) else { return nil }
-        let turns = DialogTurn.build(from: tail.messages, brief: true)
-        let blocks = DialogBlock.build(from: turns)
-        guard let block = blocks.last(where: \.hasPrompt) ?? blocks.last else { return nil }
+        var block: DialogBlock?
+        for bytes in previewTailSteps {
+            let from = len > bytes ? len - bytes : 0
+            guard let tail = Loader.loadDialogTail(meta.filePath, fromOffset: from) else { return nil }
+            let blocks = DialogBlock.build(from: DialogTurn.build(from: tail.messages, brief: true))
+            block = blocks.last(where: \.hasPrompt) ?? blocks.last
+            if block != nil || from == 0 { break }
+        }
+        guard let block else { return nil }
         let prompt = block.promptTurn
         return PalettePreview(
             promptTurn: prompt,
