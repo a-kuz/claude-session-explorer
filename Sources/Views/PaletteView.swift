@@ -153,7 +153,8 @@ struct PaletteView: View {
     static func height(forRows n: Int) -> CGFloat {
         let chrome: CGFloat = 50 + 1
         if n == 0 { return chrome + 70 }
-        return chrome + 12 + CGFloat(min(n, maxRows)) * rowHeight
+        // The preview beside the list needs room even for a single row.
+        return max(380, chrome + 12 + CGFloat(min(n, maxRows)) * rowHeight)
     }
 
     var body: some View {
@@ -374,11 +375,16 @@ private struct PalettePreviewPane: View {
             if let p = loaded {
                 VStack(alignment: .leading, spacing: 0) {
                     if let turn = p.promptTurn {
-                        TurnView(turn: turn, tokens: [], isFocused: false, images: p.promptImages)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.horizontal, 14).padding(.vertical, 10)
-                            .frame(maxWidth: .infinity, maxHeight: 150, alignment: .topLeading)
-                            .clipped()
+                        // Pinned above the replies; a long prompt or a pasted
+                        // screenshot scrolls within its own band.
+                        ScrollView {
+                            TurnView(turn: turn, tokens: [], isFocused: false, images: p.promptImages)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.horizontal, 14).padding(.vertical, 10)
+                                .frame(maxWidth: .infinity, alignment: .topLeading)
+                        }
+                        .frame(maxHeight: 190)
+                        .fixedSize(horizontal: false, vertical: true)
                     } else if !p.promptText.isEmpty {
                         Text(p.promptText)
                             .font(.system(size: 13 * Self.scale, weight: .semibold))
