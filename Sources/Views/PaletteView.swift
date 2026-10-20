@@ -86,7 +86,9 @@ final class PaletteModel: ObservableObject {
         let keep = keepCursor ? selected?.id : nil
         items = Palette.rank(query: query, sessions: sessions, live: live, showAll: showAll)
         index = keep.flatMap { id in items.firstIndex { $0.id == id } } ?? 0
-        schedulePreview()
+        // A registry tick that leaves the cursor on the same session keeps the
+        // loaded preview instead of blanking and re-reading it.
+        if previewID != selected?.id { schedulePreview() }
     }
 
     /// Reads the tail of the cursor's session off-thread, after a short pause
@@ -212,6 +214,7 @@ struct PaletteView: View {
                         }
                         .padding(6)
                         .animation(.easeOut(duration: 0.12), value: palette.index)
+                        .transaction { if $0.animation != nil && palette.keyboardMove == 0 { $0.animation = nil } }
                     }
                     .onChange(of: palette.keyboardMove) { _, _ in
                         if let id = palette.selected?.id { proxy.scrollTo(id, anchor: nil) }
@@ -362,6 +365,7 @@ private struct PalettePreviewPane: View {
         .background(Color.primary.opacity(0.025))
         .contentShape(Rectangle())
         .gesture(WindowDragGesture())
+        .transaction { $0.animation = nil }
         .environment(\.uiScale, Self.scale)
     }
 
@@ -370,7 +374,7 @@ private struct PalettePreviewPane: View {
             if let p = loaded {
                 VStack(alignment: .leading, spacing: 0) {
                     if let turn = p.promptTurn {
-                        TurnView(turn: turn, tokens: [], isFocused: false)
+                        TurnView(turn: turn, tokens: [], isFocused: false, images: p.promptImages)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, 14).padding(.vertical, 10)
                             .frame(maxWidth: .infinity, maxHeight: 150, alignment: .topLeading)
@@ -451,6 +455,7 @@ final class PalettePanel: NSObject, NSWindowDelegate {
         panel = p
         let host = NSHostingView(rootView: PaletteView(palette: m))
         host.sizingOptions = []
+        host.wantsLayer = true
         p.contentView = host
         place(p, rows: m.items.count)
         observeSize(of: m, panel: p)
@@ -531,8 +536,9 @@ final class PalettePanel: NSObject, NSWindowDelegate {
             f.origin.y += f.height - h
             f.size.height = h
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.32
-                ctx.timingFunction = Self.spring
+                ctx.duration = 0.3
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 1, 0.3, 1)
+                ctx.allowsImplicitAnimation = true
                 p.animator().setFrame(f, display: true)
             }
         }

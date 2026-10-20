@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 /// One row of the jump palette: a session from the library, a running process,
 /// or both when the running process's session is in the library.
@@ -154,6 +155,8 @@ enum Palette {
 /// transcript view (brief mode): the prompt that led it and Claude's turns.
 struct PalettePreview {
     let promptTurn: DialogTurn?
+    /// Images pasted into the prompt (base64 or cache-file refs).
+    let promptImages: [NSImage]
     /// Fallback heading when the prompt lies before the chunk that was read.
     let promptText: String
     let responses: [DialogTurn]
@@ -169,17 +172,26 @@ extension Palette {
         guard !meta.filePath.isEmpty else { return nil }
         let len = Loader.fileLength(meta.filePath)
         var block: DialogBlock?
+        var chunk = ""
         for bytes in previewTailSteps {
             let from = len > bytes ? len - bytes : 0
             guard let tail = Loader.loadDialogTail(meta.filePath, fromOffset: from) else { return nil }
+            chunk = tail.text
             let blocks = DialogBlock.build(from: DialogTurn.build(from: tail.messages, brief: true))
             block = blocks.last(where: \.hasPrompt) ?? blocks.last
             if block != nil || from == 0 { break }
         }
         guard let block else { return nil }
         let prompt = block.promptTurn
+        var promptImages: [NSImage] = []
+        if let p = prompt, p.imageCount > 0, p.imageStartIndex >= 0 {
+            let all = Loader.loadImages(in: chunk)
+            let end = min(p.imageStartIndex + p.imageCount, all.count)
+            if p.imageStartIndex < end { promptImages = Array(all[p.imageStartIndex..<end]) }
+        }
         return PalettePreview(
             promptTurn: prompt,
+            promptImages: promptImages,
             promptText: prompt?.bodyText ?? meta.lastUserText,
             responses: prompt == nil ? block.turns : Array(block.turns.dropFirst()))
     }

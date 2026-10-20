@@ -459,19 +459,19 @@ enum Loader {
     /// the bytes after `fromOffset` are parsed. Returns the new messages and the
     /// new end offset. `truncated` means the file shrank/rotated → full reload.
     static func loadDialogTail(_ filePath: String, fromOffset: UInt64)
-        -> (messages: [DialogMessage], newOffset: UInt64, truncated: Bool)? {
+        -> (messages: [DialogMessage], newOffset: UInt64, truncated: Bool, text: String)? {
         guard let handle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: filePath)) else {
             return nil
         }
         defer { try? handle.close() }
         let end = (try? handle.seekToEnd()) ?? 0
-        if end < fromOffset { return ([], end, true) }   // shrank/rotated
-        if end == fromOffset { return ([], end, false) } // nothing new
+        if end < fromOffset { return ([], end, true, "") }   // shrank/rotated
+        if end == fromOffset { return ([], end, false, "") } // nothing new
         try? handle.seek(toOffset: fromOffset)
         let data = (try? handle.readToEnd()) ?? Data()
-        guard let text = String(data: data, encoding: .utf8) else { return ([], end, false) }
+        guard let text = String(data: data, encoding: .utf8) else { return ([], end, false, "") }
         let msgs = parseDialogLines(text.split(separator: "\n", omittingEmptySubsequences: true))
-        return (msgs, end, false)
+        return (msgs, end, false, text)
     }
 
     /// Lazily load all inline images from a session, in the SAME order that
@@ -485,6 +485,12 @@ enum Loader {
     /// a placeholder NSImage (indices must stay aligned).
     static func loadImages(_ filePath: String) -> [NSImage] {
         guard let content = try? String(contentsOfFile: filePath, encoding: .utf8) else { return [] }
+        return loadImages(in: content)
+    }
+
+    /// Same walk over an already-read chunk of jsonl (e.g. a file tail); the
+    /// indices line up with the turns built from that same chunk.
+    static func loadImages(in content: String) -> [NSImage] {
         var images: [NSImage] = []
         var base64Seen: [NSImage] = []   // standalone base64 images, in file order
 
