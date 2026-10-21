@@ -323,11 +323,18 @@ private struct PaletteRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            if item.live?.status == "busy" {
-                PulsingDot(color: blue ? .white : dotColor, size: 8)
-            } else {
-                Circle().fill(blue ? .white : dotColor).frame(width: 8, height: 8)
+            // The dot marks a running process and its state; library-only
+            // rows get an empty slot so titles stay aligned.
+            Group {
+                if item.live?.status == "busy" {
+                    PulsingDot(color: blue ? .white : dotColor, size: 8)
+                } else if item.live != nil {
+                    Circle().fill(blue ? .white : dotColor)
+                } else {
+                    Color.clear
+                }
             }
+            .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
                     Text(item.title)
@@ -372,7 +379,7 @@ private struct PaletteRow: View {
     }
 
     private var dotColor: Color {
-        guard let l = item.live else { return Theme.dotColor(for: item.projectPath) }
+        guard let l = item.live else { return .clear }
         switch l.status {
         case "waiting": return .orange
         case "busy": return Theme.accent
