@@ -254,9 +254,14 @@ struct PaletteView: View {
 struct PaletteChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: PaletteView.corner, style: .continuous))
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: PaletteView.corner, style: .continuous))
+            // A light wash over the material, strongest at the top, lifts the
+            // panel the way Spotlight's bar reads lighter than its backdrop.
+            .background(LinearGradient(colors: [Color.white.opacity(0.42), Color.white.opacity(0.22)],
+                                       startPoint: .top, endPoint: .bottom),
+                        in: RoundedRectangle(cornerRadius: PaletteView.corner, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: PaletteView.corner, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
+                .strokeBorder(Color.white.opacity(0.5), lineWidth: 1))
             .overlay(RoundedRectangle(cornerRadius: PaletteView.corner, style: .continuous)
                 .stroke(Color.black.opacity(0.12), lineWidth: 0.5))
             .shadow(color: .black.opacity(0.28), radius: 26, y: 14)
