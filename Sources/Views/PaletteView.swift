@@ -18,8 +18,12 @@ final class PaletteModel: ObservableObject {
     @Published private(set) var index = 0
     @Published private(set) var live: [String: LiveSession] = [:]
     /// Preview of `selected`; `nil` while loading or when nothing is selected.
+    /// The preview on screen and the session it belongs to. It stays while
+    /// the next one loads, so moving the cursor never blanks the pane.
     @Published private(set) var preview: PalettePreview??
     @Published private(set) var previewID: String?
+    /// True while `preview` is for a different session than the cursor's.
+    @Published private(set) var previewStale = false
     /// Bumped when the keyboard or a click chooses a row; hover never does.
     @Published private(set) var keyboardMove = 0
 
@@ -86,24 +90,27 @@ final class PaletteModel: ObservableObject {
         let keep = keepCursor ? selected?.id : nil
         items = Palette.rank(query: query, sessions: sessions, live: live, showAll: showAll)
         index = keep.flatMap { id in items.firstIndex { $0.id == id } } ?? 0
-        // A registry tick that leaves the cursor on the same session keeps the
-        // loaded preview instead of blanking and re-reading it.
-        if previewID != selected?.id { schedulePreview() }
+        schedulePreview()
     }
 
     /// Reads the tail of the cursor's session off-thread, after a short pause
     /// so holding ↓ doesn't read a file per row.
     private func schedulePreview() {
         previewTask?.cancel()
-        guard let item = selected else { preview = nil; previewID = nil; return }
-        guard let meta = item.meta else { preview = .some(nil); previewID = item.id; return }
-        if previewID != item.id { preview = nil; previewID = item.id }
+        guard let item = selected else { preview = nil; previewID = nil; previewStale = false; return }
+        if previewID == item.id { previewStale = false; return }
+        guard let meta = item.meta else { preview = .some(nil); previewID = item.id; previewStale = false; return }
+        previewStale = true
         previewTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 120_000_000)
             guard !Task.isCancelled else { return }
             let loaded = await Task.detached { Palette.loadPreview(meta) }.value
             guard let self, !Task.isCancelled, self.selected?.id == item.id else { return }
-            self.preview = .some(loaded)
+            withAnimation(.easeOut(duration: 0.18)) {
+                self.preview = .some(loaded)
+                self.previewID = item.id
+                self.previewStale = false
+            }
         }
     }
 
@@ -363,23 +370,24 @@ private struct PalettePreviewPane: View {
     static let scale: CGFloat = 0.85
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if let item = palette.selected {
-                content(item)
-            } else {
-                Spacer()
+        ZStack(alignment: .topLeading) {
+            if let id = palette.previewID, let loaded = palette.preview {
+                content(loaded, id: id)
+                    .id(id)
+                    .transition(.opacity)
+                    .opacity(palette.previewStale ? 0.45 : 1)
+                    .animation(.easeOut(duration: 0.12), value: palette.previewStale)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color.primary.opacity(0.025))
         .contentShape(Rectangle())
         .gesture(WindowDragGesture())
-        .transaction { $0.animation = nil }
         .environment(\.uiScale, Self.scale)
     }
 
-    @ViewBuilder private func content(_ item: PaletteItem) -> some View {
-        if let loaded = palette.preview, palette.previewID == item.id {
+    @ViewBuilder private func content(_ loaded: PalettePreview?, id: String) -> some View {
+        Group {
             if let p = loaded {
                 VStack(alignment: .leading, spacing: 0) {
                     if let turn = p.promptTurn {
@@ -421,20 +429,17 @@ private struct PalettePreviewPane: View {
                             }
                             .defaultScrollAnchor(.bottom)
                         }
-                        .id(item.id)
                         .layoutPriority(1)
                     }
                 }
             } else {
-                Text(item.meta == nil ? "Running, no transcript on disk yet" : "Empty transcript")
+                Text("No transcript on disk yet")
                     .font(.system(size: 12))
                     .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        } else {
-            ProgressView().controlSize(.small)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .transaction { $0.animation = nil }
     }
 }
 
