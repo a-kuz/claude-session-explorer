@@ -163,7 +163,7 @@ struct PaletteView: View {
     /// Like Spotlight, the panel is just the search field until there are
     /// rows, then grows with them up to `maxRows`.
     static func height(forRows n: Int) -> CGFloat {
-        let chrome: CGFloat = 50 + 1
+        let chrome: CGFloat = 56
         if n == 0 { return chrome + 70 }
         // The preview beside the list needs room even for a single row.
         return max(380, chrome + 12 + CGFloat(min(n, maxRows)) * rowHeight)
@@ -186,15 +186,15 @@ struct PaletteView: View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 19, weight: .medium))
                     .foregroundStyle(.secondary)
                 TextField("Jump to session", text: $palette.query)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 19, weight: .regular))
+                    .font(.system(size: 22, weight: .regular))
                     .focused($fieldFocused)
                 statusSummary
             }
-            .padding(.horizontal, 16).padding(.vertical, 12)
+            .padding(.horizontal, 18).padding(.vertical, 13)
             .contentShape(Rectangle())
             .gesture(WindowDragGesture())
 
@@ -257,7 +257,7 @@ struct PaletteChrome: ViewModifier {
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: PaletteView.corner, style: .continuous))
             // A light wash over the material, strongest at the top, lifts the
             // panel the way Spotlight's bar reads lighter than its backdrop.
-            .background(LinearGradient(colors: [Color.white.opacity(0.42), Color.white.opacity(0.22)],
+            .background(LinearGradient(colors: [Color.white.opacity(0.72), Color.white.opacity(0.58)],
                                        startPoint: .top, endPoint: .bottom),
                         in: RoundedRectangle(cornerRadius: PaletteView.corner, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: PaletteView.corner, style: .continuous)
