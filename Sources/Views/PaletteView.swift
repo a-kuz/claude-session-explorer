@@ -146,6 +146,9 @@ struct PaletteView: View {
     static let previewWidth: CGFloat = 440
     static let listWidth: CGFloat = 600
     static let rowHeight: CGFloat = 52
+    static let corner: CGFloat = 20
+    /// Transparent margin around the panel where its shadow is painted.
+    static let margin: CGFloat = 60
     static let maxRows = 9
 
     /// Like Spotlight, the panel is just the search field until there are
@@ -168,9 +171,16 @@ struct PaletteView: View {
         // No fixed height: the panel animates its frame and the content
         // follows it top-aligned, so the search field never slides off.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .stroke(Color.primary.opacity(0.12), lineWidth: 1))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
+            .strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
+            .stroke(Color.black.opacity(0.12), lineWidth: 0.5))
+        // Spotlight's shadow: large, soft and set below the panel. The window
+        // has no shadow of its own; this one is drawn in the margin.
+        .shadow(color: .black.opacity(0.28), radius: 26, y: 14)
+        .shadow(color: .black.opacity(0.10), radius: 3, y: 1)
+        .padding(Self.margin)
         .onAppear { fieldFocused = true }
         .onReceive(NotificationCenter.default.publisher(for: PalettePanel.focusNotification)) { _ in
             fieldFocused = true
@@ -462,19 +472,26 @@ final class PalettePanel: NSObject, NSWindowDelegate {
         let host = NSHostingView(rootView: PaletteView(palette: m))
         host.sizingOptions = []
         host.wantsLayer = true
+        host.layerUsesCoreImageFilters = true
+        let blur = CIFilter(name: "CIGaussianBlur")!
+        blur.name = "blur"
+        blur.setValue(0, forKey: kCIInputRadiusKey)
+        host.layer?.filters = [blur]
         p.contentView = host
         place(p, rows: m.items.count)
         observeSize(of: m, panel: p)
-        // Spotlight-style entrance: a quick fade with a slight scale-up.
-        let target = p.frame
+        // Spotlight's entrance, measured frame by frame: fade and un-blur in
+        // ~70 ms while the content springs from 105 % through a 1 % undershoot
+        // to its size over ~230 ms. The window keeps its final frame so the
+        // shadow lands where the panel does.
         p.alphaValue = 0
-        p.setFrame(target.insetBy(dx: target.width * 0.02, dy: target.height * 0.02), display: false)
         p.makeKeyAndOrderFront(nil)
+        Self.animateBlur(host.layer, from: 14, to: 0, duration: 0.1)
+        Self.springScale(host.layer, from: 1.05, to: 1, duration: 0.3)
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.22
-            ctx.timingFunction = Self.spring
+            ctx.duration = 0.08
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             p.animator().alphaValue = 1
-            p.animator().setFrame(target, display: true)
         }
         m.startLivePolling()
         installKeyMonitor(for: m)
@@ -491,12 +508,12 @@ final class PalettePanel: NSObject, NSWindowDelegate {
         guard let p = panel, p.isVisible else { return }
         UserDefaults.standard.set(NSStringFromPoint(NSPoint(x: p.frame.minX, y: p.frame.maxY)),
                                   forKey: Self.originKey)
-        let f = p.frame
+        Self.animateBlur(p.contentView?.layer, from: 0, to: 12, duration: 0.08)
+        Self.springScale(p.contentView?.layer, from: 1, to: 0.96, duration: 0.08, spring: false)
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.13
+            ctx.duration = 0.08
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
             p.animator().alphaValue = 0
-            p.animator().setFrame(f.insetBy(dx: f.width * 0.015, dy: f.height * 0.015), display: true)
         }, completionHandler: {
             p.orderOut(nil)
             p.contentView = nil
@@ -524,12 +541,43 @@ final class PalettePanel: NSObject, NSWindowDelegate {
         override var canBecomeMain: Bool { false }
     }
 
-    /// Ease-out with a touch of overshoot, like the system's panel springs.
-    private static let spring = CAMediaTimingFunction(controlPoints: 0.2, 1.1, 0.3, 1.0)
+    /// Scales the content about its centre. `spring` gives the damped
+    /// overshoot Spotlight shows on entrance; otherwise a plain ease-in.
+    private static func springScale(_ layer: CALayer?, from: CGFloat, to: CGFloat,
+                                    duration: Double, spring: Bool = true) {
+        guard let layer else { return }
+        let b = layer.bounds
+        func t(_ k: CGFloat) -> CATransform3D {
+            var m = CATransform3DMakeTranslation(b.midX, b.midY, 0)
+            m = CATransform3DScale(m, k, k, 1)
+            return CATransform3DTranslate(m, -b.midX, -b.midY, 0)
+        }
+        let a: CABasicAnimation
+        if spring {
+            let sp = CASpringAnimation(keyPath: "transform")
+            sp.mass = 1; sp.stiffness = 380; sp.damping = 22; sp.initialVelocity = 0
+            a = sp
+        } else {
+            a = CABasicAnimation(keyPath: "transform")
+            a.timingFunction = CAMediaTimingFunction(name: .easeIn)
+        }
+        a.fromValue = t(from); a.toValue = t(to); a.duration = duration
+        a.fillMode = .forwards; a.isRemovedOnCompletion = false
+        layer.add(a, forKey: "scale")
+    }
+
+    private static func animateBlur(_ layer: CALayer?, from: CGFloat, to: CGFloat, duration: Double) {
+        guard let layer else { return }
+        let a = CABasicAnimation(keyPath: "filters.blur.inputRadius")
+        a.fromValue = from; a.toValue = to; a.duration = duration
+        a.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        a.fillMode = .forwards; a.isRemovedOnCompletion = false
+        layer.add(a, forKey: "blur")
+    }
 
     private static func size(rows: Int) -> NSSize {
-        NSSize(width: PaletteView.previewWidth + PaletteView.listWidth + 1,
-               height: PaletteView.height(forRows: rows))
+        NSSize(width: PaletteView.previewWidth + PaletteView.listWidth + 1 + 2 * PaletteView.margin,
+               height: PaletteView.height(forRows: rows) + 2 * PaletteView.margin)
     }
     private var sizeObserver: AnyCancellable?
 
@@ -541,10 +589,10 @@ final class PalettePanel: NSObject, NSWindowDelegate {
             let h = Self.size(rows: n).height
             f.origin.y += f.height - h
             f.size.height = h
+            // ~270 ms with a 1 % overshoot, like Spotlight's result list.
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.3
-                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 1, 0.3, 1)
-                ctx.allowsImplicitAnimation = true
+                ctx.duration = 0.27
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 1.08, 0.35, 1.0)
                 p.animator().setFrame(f, display: true)
             }
         }
@@ -559,7 +607,7 @@ final class PalettePanel: NSObject, NSWindowDelegate {
         p.hidesOnDeactivate = false
         p.isOpaque = false
         p.backgroundColor = .clear
-        p.hasShadow = true
+        p.hasShadow = false
         p.isMovableByWindowBackground = true
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         p.delegate = self
@@ -573,7 +621,7 @@ final class PalettePanel: NSObject, NSWindowDelegate {
         let f = screen.visibleFrame
         // The remembered position is the panel's top-left corner, so growing
         // and shrinking keep the search field where the user left it.
-        var top = NSPoint(x: f.midX - size.width / 2, y: f.maxY - f.height * 0.18)
+        var top = NSPoint(x: f.midX - size.width / 2, y: f.maxY - f.height * 0.18 + PaletteView.margin)
         if let saved = UserDefaults.standard.string(forKey: Self.originKey) {
             let o = NSPointFromString(saved)
             let r = NSRect(x: o.x, y: o.y - size.height, width: size.width, height: size.height)

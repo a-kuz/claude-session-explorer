@@ -1,19 +1,29 @@
 import SwiftUI
 
-/// A render group derived from a turn's ordered segments: a prose run, a run of
-/// adjacent tool calls (collapsed into one strip), or an AskUserQuestion card.
-enum SegmentGroup: Identifiable {
+/// Compact content that shares one wrapping row, in transcript order.
+enum InlineSegment: Identifiable {
     case thinking(id: String, text: String)
+    case tool(ToolUse)
+
+    var id: String {
+        switch self {
+        case .thinking(let id, _): return "thinking-\(id)"
+        case .tool(let tool): return "tool-\(tool.id.uuidString)"
+        }
+    }
+}
+
+/// Prose, a wrapping run of thinking/tool chips, or a rich tool card.
+enum SegmentGroup: Identifiable {
     case prose(id: String, blocks: [MarkdownBlock])
-    case tools(id: String, [ToolUse])
+    case inline(id: String, [InlineSegment])
     case ask(ToolUse)
     case image(ToolUse)
 
     var id: String {
         switch self {
-        case .thinking(let id, _): return "thinking-\(id)"
         case .prose(let id, _): return id
-        case .tools(let id, _): return id
+        case .inline(let id, _): return id
         case .ask(let t): return "ask-\(t.id.uuidString)"
         case .image(let t): return "img-\(t.id.uuidString)"
         }
@@ -146,10 +156,18 @@ struct TurnView: View {
     /// strip (e.g. Read³ · Edit) while keeping prose runs in their place.
     private var groupedSegments: [SegmentGroup] {
         var out: [SegmentGroup] = []
+        func appendInline(_ piece: InlineSegment) {
+            if case .inline(let id, var pieces)? = out.last {
+                pieces.append(piece)
+                out[out.count - 1] = .inline(id: id, pieces)
+            } else {
+                out.append(.inline(id: "inline-\(piece.id)", [piece]))
+            }
+        }
         for seg in turn.segments {
             switch seg {
             case .thinking(let id, let text):
-                out.append(.thinking(id: id, text: text))
+                appendInline(.thinking(id: id, text: text))
             case .prose(let id, let blocks):
                 out.append(.prose(id: id, blocks: blocks))
             case .tool(let t):
@@ -161,10 +179,8 @@ struct TurnView: View {
                 } else if t.imageFilePath != nil {
                     // A Read of an image renders inline, never folded into a chip.
                     out.append(.image(t))
-                } else if case .tools(let id, var arr)? = out.last {
-                    arr.append(t); out[out.count - 1] = .tools(id: id, arr)
                 } else {
-                    out.append(.tools(id: "tg-\(t.id.uuidString)", [t]))
+                    appendInline(.tool(t))
                 }
             }
         }
@@ -182,18 +198,20 @@ struct TurnView: View {
             } else {
                 ForEach(groupedSegments) { group in
                     switch group {
-                    case .thinking(_, let text):
-                        ThinkingView(text: text)
                     case .prose(_, let blocks):
                         VStack(alignment: .leading, spacing: s(10)) {
                             ForEach(blocks) { block in
                                 MarkdownBlockView(block: block, tokens: tokens)
                             }
                         }
-                    case .tools(_, let tools):
-                        // Tool calls as wrapping chips (one per call).
+                    case .inline(_, let pieces):
                         FlowLayout(spacing: s(6), lineSpacing: s(6)) {
-                            ForEach(tools) { ToolChip(tool: $0) }
+                            ForEach(pieces) { piece in
+                                switch piece {
+                                case .thinking(_, let text): ThinkingView(text: text)
+                                case .tool(let tool): ToolChip(tool: tool)
+                                }
+                            }
                         }
                     case .ask(let tool):
                         AskUserQuestionCard(tool: tool, selectedAnswer: nextPrompt)
@@ -216,41 +234,66 @@ private struct ThinkingView: View {
     @Environment(\.s) private var s
 
     var body: some View {
-        VStack(alignment: .leading, spacing: s(6)) {
-            Button {
-                isExpanded.toggle()
-            } label: {
-                HStack(spacing: s(6)) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    Label("Thinking", systemImage: "brain")
+        if isExpanded {
+            expandedCard
+                .layoutValue(key: FlowFullWidthKey.self, value: true)
+        } else {
+            Button { isExpanded = true } label: {
+                HStack(spacing: s(5)) {
+                    Image(systemName: "brain").font(.system(size: 10.5 * scale))
+                    Text("Thinking")
+                        .font(DialogFonts.mono(size: 11.5 * scale, weight: .medium))
                 }
-                .font(.system(size: 12 * scale, weight: .medium))
-                .foregroundStyle(Theme.secondaryText)
+                .foregroundStyle(Color.secondary)
+                .padding(.horizontal, s(9)).padding(.vertical, s(4))
+                .background(Color.primary.opacity(0.05), in: Capsule())
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .textSelection(.disabled)
+            .accessibilityValue("Collapsed")
+        }
+    }
+
+    private var expandedCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button { isExpanded = false } label: {
+                HStack(spacing: s(5)) {
+                    Image(systemName: "chevron.down")
+                        .foregroundStyle(Color(hex: 0x7AA2F7))
+                    Label("Thinking", systemImage: "brain")
+                        .foregroundStyle(Color(hex: 0xE6E6E6))
+                }
+                .font(DialogFonts.mono(size: 11 * scale))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, s(11)).padding(.vertical, s(9))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
-            if isExpanded {
-                VStack(alignment: .leading, spacing: s(8)) {
-                    Text(verbatim: showFullText ? text : MessageContent.clampHead(text))
-                        .font(.system(size: 12 * scale))
-                        .foregroundStyle(Theme.secondaryText)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if !showFullText && MessageContent.isOversized(text) {
-                        Button("Показать полностью — может подвиснуть") {
-                            showFullText = true
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Theme.accent)
-                    }
+            .textSelection(.disabled)
+            .accessibilityValue("Expanded")
+
+            Divider().overlay(Color.white.opacity(0.12))
+            Text(verbatim: showFullText ? text : MessageContent.clampHead(text))
+                .font(DialogFonts.mono(size: 11 * scale))
+                .foregroundStyle(Color(hex: 0xC2C2C2))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, s(11)).padding(.vertical, s(9))
+            if !showFullText && MessageContent.isOversized(text) {
+                Button("Показать полностью — может подвиснуть") {
+                    showFullText = true
                 }
-                .padding(.top, s(6))
+                .font(.system(size: 10.5 * scale))
+                .foregroundStyle(Color(hex: 0x8AB4F8))
+                .padding(.horizontal, s(11)).padding(.bottom, s(9))
+                .buttonStyle(.plain)
             }
         }
-        .padding(s(10))
-        .background(Theme.codeBg, in: RoundedRectangle(cornerRadius: s(8)))
+        .background(Color(hex: 0x1E1E1E), in: RoundedRectangle(cornerRadius: s(9)))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -369,9 +412,17 @@ struct LightboxThumb: View {
 
     @State private var hovering = false
 
+    /// The fitted size, computed up front: a flexible frame would let the
+    /// card grow past the picture in a vertically fixed-size parent.
+    private var fitted: CGSize {
+        let w = max(image.size.width, 1), h = max(image.size.height, 1)
+        let k = min(maxW / w, maxH / h, 1)
+        return CGSize(width: w * k, height: h * k)
+    }
+
     var body: some View {
         Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
-            .frame(maxWidth: maxW, maxHeight: maxH)
+            .frame(width: fitted.width, height: fitted.height)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(Color.primary.opacity(hovering ? 0.22 : 0.1), lineWidth: 0.5))
