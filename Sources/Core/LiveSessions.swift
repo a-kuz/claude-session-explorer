@@ -26,9 +26,8 @@ struct LiveSession: Identifiable, Hashable {
     var statusRank: Int {
         switch status {
         case "waiting": return 0
-        case "busy": return 1
-        case "shell": return 2
-        default: return 3
+        case "busy", "shell": return 1
+        default: return 2
         }
     }
 }

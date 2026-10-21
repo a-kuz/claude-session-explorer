@@ -378,11 +378,7 @@ private struct PaletteRow: View {
     }
 
     private func chipText(_ l: LiveSession) -> String {
-        switch l.status {
-        case "busy": return "generating"
-        case "shell": return "running command"
-        default: return l.waitingFor ?? l.status
-        }
+        l.isWorking ? "working" : (l.waitingFor ?? l.status)
     }
 
     private var dotColor: Color {
