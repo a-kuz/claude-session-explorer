@@ -345,7 +345,14 @@ private struct PaletteRow: View {
                         .foregroundStyle(primary)
                         .lineLimit(1)
                     if let l = item.live {
-                        Text(chipText(l))
+                        HStack(spacing: 4) {
+                            Text(chipText(l))
+                            // A shell command in flight: same state, with a terminal glyph.
+                            if l.status == "shell" {
+                                Image(systemName: "terminal")
+                                    .font(.system(size: 9, weight: .semibold))
+                            }
+                        }
                             .font(.system(size: 10.5, weight: .medium, design: .rounded))
                             .foregroundStyle(blue ? .white : dotColor)
                             .padding(.horizontal, 6).padding(.vertical, 1.5)
