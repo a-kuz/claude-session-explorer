@@ -102,7 +102,7 @@ final class PaletteModel: ObservableObject {
         guard let meta = item.meta else { preview = .some(nil); previewID = item.id; previewStale = false; return }
         previewStale = true
         previewTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            try? await Task.sleep(nanoseconds: 250_000_000)
             guard !Task.isCancelled else { return }
             let loaded = await Task.detached { Palette.loadPreview(meta) }.value
             guard let self, !Task.isCancelled, self.selected?.id == item.id else { return }
@@ -156,6 +156,8 @@ struct PaletteView: View {
     static let corner: CGFloat = 20
     /// Transparent margin around the panel where its shadow is painted.
     static let margin: CGFloat = 60
+    /// Visible gap between the preview window and the palette.
+    static let gap: CGFloat = 14
     static let maxRows = 9
 
     /// Like Spotlight, the panel is just the search field until there are
@@ -168,25 +170,12 @@ struct PaletteView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            PalettePreviewPane(palette: palette)
-                .frame(width: Self.previewWidth)
-            listColumn
-                .frame(width: Self.listWidth)
-        }
+        listColumn
+            .frame(width: Self.listWidth)
         // No fixed height: the panel animates its frame and the content
         // follows it top-aligned, so the search field never slides off.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
-            .strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
-        .overlay(RoundedRectangle(cornerRadius: Self.corner, style: .continuous)
-            .stroke(Color.black.opacity(0.12), lineWidth: 0.5))
-        // Spotlight's shadow: large, soft and set below the panel. The window
-        // has no shadow of its own; this one is drawn in the margin.
-        .shadow(color: .black.opacity(0.28), radius: 26, y: 14)
-        .shadow(color: .black.opacity(0.10), radius: 3, y: 1)
-        .padding(Self.margin)
+        .modifier(PaletteChrome())
         .onAppear { fieldFocused = true }
         .onReceive(NotificationCenter.default.publisher(for: PalettePanel.focusNotification)) { _ in
             fieldFocused = true
@@ -257,6 +246,34 @@ struct PaletteView: View {
             .padding(.horizontal, 7).padding(.vertical, 3)
             .background(Color.primary.opacity(0.06), in: Capsule())
         }
+    }
+}
+
+/// Material, rim, corner and the Spotlight-like shadow painted in the margin,
+/// shared by the palette and the detached preview window.
+struct PaletteChrome: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: PaletteView.corner, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: PaletteView.corner, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: PaletteView.corner, style: .continuous)
+                .stroke(Color.black.opacity(0.12), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.28), radius: 26, y: 14)
+            .shadow(color: .black.opacity(0.10), radius: 3, y: 1)
+            .padding(PaletteView.margin)
+    }
+}
+
+/// The detached preview window's content.
+struct PalettePreviewWindowView: View {
+    @ObservedObject var palette: PaletteModel
+    var body: some View {
+        PalettePreviewPane(palette: palette)
+            .frame(width: PaletteView.previewWidth)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .clipShape(RoundedRectangle(cornerRadius: PaletteView.corner, style: .continuous))
+            .modifier(PaletteChrome())
     }
 }
 
@@ -380,9 +397,6 @@ private struct PalettePreviewPane: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color.primary.opacity(0.025))
-        .contentShape(Rectangle())
-        .gesture(WindowDragGesture())
         .environment(\.uiScale, Self.scale)
     }
 
@@ -455,7 +469,11 @@ final class PalettePanel: NSObject, NSWindowDelegate {
     private static let originKey = "palette.topLeft"
 
     private var panel: NSPanel?
+    /// The preview beside the palette: a child window, so it follows drags
+    /// and sits at the same level, but is never key.
+    private var previewPanel: NSPanel?
     private var model: PaletteModel?
+    private var previewObserver: AnyCancellable?
     private var keyMonitor: Any?
     private weak var app: AppModel?
 
@@ -481,7 +499,22 @@ final class PalettePanel: NSObject, NSWindowDelegate {
         host.layer?.filters = [blur]
         p.contentView = host
         place(p, rows: m.items.count)
+        let pv = previewPanel ?? makePanel(key: false)
+        previewPanel = pv
+        let phost = NSHostingView(rootView: PalettePreviewWindowView(palette: m))
+        phost.sizingOptions = []
+        phost.wantsLayer = true
+        phost.layerUsesCoreImageFilters = true
+        let pblur = CIFilter(name: "CIGaussianBlur")!
+        pblur.name = "blur"
+        pblur.setValue(0, forKey: kCIInputRadiusKey)
+        phost.layer?.filters = [pblur]
+        pv.contentView = phost
+        pv.setFrame(Self.previewFrame(beside: p.frame), display: false)
+        pv.alphaValue = 0
+        p.addChildWindow(pv, ordered: .below)
         observeSize(of: m, panel: p)
+        observePreview(of: m, panel: pv)
         // Spotlight's entrance, measured frame by frame: fade and un-blur in
         // ~70 ms while the content springs from 105 % through a 1 % undershoot
         // to its size over ~230 ms. The window keeps its final frame so the
@@ -507,7 +540,20 @@ final class PalettePanel: NSObject, NSWindowDelegate {
         if let k = keyMonitor { NSEvent.removeMonitor(k); keyMonitor = nil }
         model = nil
         sizeObserver = nil
+        previewObserver = nil
         guard let p = panel, p.isVisible else { return }
+        if let pv = previewPanel {
+            Self.animateBlur(pv.contentView?.layer, from: 0, to: 12, duration: 0.08)
+            Self.springScale(pv.contentView?.layer, from: 1, to: 0.96, duration: 0.08, spring: false)
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.08
+                pv.animator().alphaValue = 0
+            }, completionHandler: {
+                p.removeChildWindow(pv)
+                pv.orderOut(nil)
+                pv.contentView = nil
+            })
+        }
         UserDefaults.standard.set(NSStringFromPoint(NSPoint(x: p.frame.minX, y: p.frame.maxY)),
                                   forKey: Self.originKey)
         Self.animateBlur(p.contentView?.layer, from: 0, to: 12, duration: 0.08)
@@ -539,7 +585,8 @@ final class PalettePanel: NSObject, NSWindowDelegate {
     }
 
     private final class Panel: NSPanel {
-        override var canBecomeKey: Bool { true }
+        var keyable = true
+        override var canBecomeKey: Bool { keyable }
         override var canBecomeMain: Bool { false }
     }
 
@@ -578,14 +625,35 @@ final class PalettePanel: NSObject, NSWindowDelegate {
     }
 
     private static func size(rows: Int) -> NSSize {
-        NSSize(width: PaletteView.previewWidth + PaletteView.listWidth + 1 + 2 * PaletteView.margin,
+        NSSize(width: PaletteView.listWidth + 2 * PaletteView.margin,
                height: PaletteView.height(forRows: rows) + 2 * PaletteView.margin)
     }
     private var sizeObserver: AnyCancellable?
 
+    /// The preview window's frame: same top and height as the palette, its
+    /// visible edge `gap` points left of the palette's (margins overlap).
+    private static func previewFrame(beside f: NSRect) -> NSRect {
+        let w = PaletteView.previewWidth + 2 * PaletteView.margin
+        return NSRect(x: f.minX + 2 * PaletteView.margin - PaletteView.gap - w,
+                      y: f.minY, width: w, height: f.height)
+    }
+
+    /// Fades the preview window in when there is something to show and out
+    /// when the list is empty.
+    private func observePreview(of m: PaletteModel, panel pv: NSPanel) {
+        previewObserver = m.$previewID.map { $0 != nil }.removeDuplicates().sink { [weak pv] on in
+            guard let pv else { return }
+            if on { Self.animateBlur(pv.contentView?.layer, from: 10, to: 0, duration: 0.1) }
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = on ? 0.12 : 0.08
+                pv.animator().alphaValue = on ? 1 : 0
+            }
+        }
+    }
+
     /// Grows and shrinks the panel with the result count, keeping its top edge.
     private func observeSize(of m: PaletteModel, panel p: NSPanel) {
-        sizeObserver = m.$items.map(\.count).removeDuplicates().dropFirst().sink { [weak p] n in
+        sizeObserver = m.$items.map(\.count).removeDuplicates().dropFirst().sink { [weak self, weak p] n in
             guard let p else { return }
             var f = p.frame
             let h = Self.size(rows: n).height
@@ -596,23 +664,25 @@ final class PalettePanel: NSObject, NSWindowDelegate {
                 ctx.duration = 0.27
                 ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 1.08, 0.35, 1.0)
                 p.animator().setFrame(f, display: true)
+                self?.previewPanel?.animator().setFrame(Self.previewFrame(beside: f), display: true)
             }
         }
     }
 
-    private func makePanel() -> NSPanel {
+    private func makePanel(key: Bool = true) -> NSPanel {
         let p = Panel(contentRect: NSRect(origin: .zero, size: Self.size(rows: 0)),
                       styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
                       backing: .buffered, defer: false)
+        p.keyable = key
         p.level = .floating
         p.isFloatingPanel = true
         p.hidesOnDeactivate = false
         p.isOpaque = false
         p.backgroundColor = .clear
         p.hasShadow = false
-        p.isMovableByWindowBackground = true
+        p.isMovableByWindowBackground = key
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-        p.delegate = self
+        if key { p.delegate = self }
         return p
     }
 
