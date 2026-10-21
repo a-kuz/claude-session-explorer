@@ -164,7 +164,6 @@ struct PaletteView: View {
         HStack(spacing: 0) {
             PalettePreviewPane(palette: palette)
                 .frame(width: Self.previewWidth)
-            Divider()
             listColumn
                 .frame(width: Self.listWidth)
         }
@@ -203,7 +202,6 @@ struct PaletteView: View {
             .contentShape(Rectangle())
             .gesture(WindowDragGesture())
 
-            Divider()
 
             if palette.items.isEmpty {
                 Text(palette.query.isEmpty ? "Nothing is generating · ↓ for all sessions, or type" : "Nothing matches «\(palette.query)»")
@@ -402,7 +400,6 @@ private struct PalettePreviewPane: View {
                             .padding(.horizontal, 14).padding(.vertical, 10)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    Divider()
                     if p.responses.isEmpty {
                         Text("No reply yet")
                             .font(.system(size: 12))
