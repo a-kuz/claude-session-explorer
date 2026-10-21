@@ -404,23 +404,38 @@ private struct PalettePreviewPane: View {
         Group {
             if let p = loaded {
                 VStack(alignment: .leading, spacing: 0) {
-                    if let turn = p.promptTurn {
-                        // Pinned above the replies; a long prompt or a pasted
-                        // screenshot scrolls within its own band.
+                    // Pinned above the replies as a soft tinted card: regular
+                    // weight, no rule. A long prompt or a pasted screenshot
+                    // scrolls within its own band.
+                    let text = p.promptTurn.map { MessageContent.stripNoise($0.bodyText) } ?? p.promptText
+                    if !text.isEmpty || !p.promptImages.isEmpty {
                         ScrollView {
-                            TurnView(turn: turn, tokens: [], isFocused: false, images: p.promptImages)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(.horizontal, 14).padding(.vertical, 10)
-                                .frame(maxWidth: .infinity, alignment: .topLeading)
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    if !text.isEmpty {
+                                        Text(MessageContent.clampHead(text))
+                                            .font(.system(size: 13))
+                                            .foregroundStyle(.primary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                            .textSelection(.enabled)
+                                    }
+                                    Spacer(minLength: 4)
+                                    if let ts = p.promptTurn?.timestamp {
+                                        Text(Format.timeOrDate(ts))
+                                            .font(.system(size: 10.5))
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
+                                if !p.promptImages.isEmpty { ImageTiles(images: p.promptImages) }
+                            }
+                            .padding(.horizontal, 12).padding(.vertical, 9)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                            .background(Theme.accent.opacity(0.09),
+                                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .padding(10)
                         }
-                        .frame(maxHeight: 190)
+                        .frame(maxHeight: 200)
                         .fixedSize(horizontal: false, vertical: true)
-                    } else if !p.promptText.isEmpty {
-                        Text(p.promptText)
-                            .font(.system(size: 13 * Self.scale, weight: .semibold))
-                            .lineLimit(4)
-                            .padding(.horizontal, 14).padding(.vertical, 10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     if p.responses.isEmpty {
                         Text("No reply yet")
