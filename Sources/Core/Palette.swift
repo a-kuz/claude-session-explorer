@@ -19,7 +19,8 @@ enum Palette {
     static let maxRows = 60
 
     /// Ranks library sessions and live processes against a free-text query.
-    /// Empty query: only the sessions that are generating right now, by recency
+    /// Empty query: only the sessions Claude is working in right now (generating
+    /// or running a shell command), by recency
     /// (`showAll` lifts that to every session). Otherwise every whitespace token must match the
     /// row (title, project, peer name, last prompt, id); the score prefers
     /// word-prefix hits in the title, then a fuzzy subsequence, then recency.
@@ -35,7 +36,7 @@ enum Palette {
         for meta in sessions {
             let l = live[meta.id]
             if l != nil { seenLive.insert(meta.id) }
-            if busyOnly, l?.status != "busy" { continue }
+            if busyOnly, l?.isWorking != true { continue }
             let title = AutoTitle.displayTitle(meta)
             let when = [meta.mtime, meta.lastActivity ?? .distantPast, l?.updatedAt ?? .distantPast].max()!
             let fields = Fields(title: title, project: meta.projectLabel + " " + meta.projectPath,
@@ -48,7 +49,7 @@ enum Palette {
                 score: s + recency(when, now: now) + (l.map { liveBonus($0) } ?? 0)))
         }
         // Processes whose session has no jsonl in the library yet (just started).
-        for (sid, l) in live where !seenLive.contains(sid) && (!busyOnly || l.status == "busy") {
+        for (sid, l) in live where !seenLive.contains(sid) && (!busyOnly || l.isWorking) {
             let label = (l.cwd as NSString).lastPathComponent
             let fields = Fields(title: l.name, project: label + " " + l.cwd, name: l.name, body: "", id: sid)
             guard let s = score(tokens, fields) else { continue }
@@ -143,7 +144,7 @@ enum Palette {
     private static func liveBonus(_ l: LiveSession) -> Double {
         switch l.status {
         case "waiting": return 2.5
-        case "busy": return 2
+        case "busy", "shell": return 2
         default: return 1.5
         }
     }

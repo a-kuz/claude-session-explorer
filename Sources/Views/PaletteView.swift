@@ -43,7 +43,7 @@ final class PaletteModel: ObservableObject {
         items.indices.contains(index) ? items[index] : nil
     }
 
-    var busyCount: Int { live.values.filter { $0.status == "busy" }.count }
+    var workingCount: Int { live.values.filter(\.isWorking).count }
 
     func move(_ delta: Int) {
         if query.isEmpty, !showAll {
@@ -200,7 +200,7 @@ struct PaletteView: View {
 
 
             if palette.items.isEmpty {
-                Text(palette.query.isEmpty ? "Nothing is generating · ↓ for all sessions, or type" : "Nothing matches «\(palette.query)»")
+                Text(palette.query.isEmpty ? "Nothing is working · ↓ for all sessions, or type" : "Nothing matches «\(palette.query)»")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -231,16 +231,19 @@ struct PaletteView: View {
     }
 
     @ViewBuilder private var statusSummary: some View {
-        let busy = palette.busyCount
+        let working = palette.workingCount
+        let idle = palette.live.count - working
         if !palette.live.isEmpty {
             HStack(spacing: 6) {
-                if busy > 0 {
+                if working > 0 {
                     PulsingDot(color: Theme.accent, size: 6)
-                    Text("\(busy) generating")
+                    Text("\(working) working")
                         .foregroundStyle(Theme.accent)
                 }
-                Text(busy > 0 ? "· \(palette.live.count) running" : "\(palette.live.count) running")
-                    .foregroundStyle(.secondary)
+                if idle > 0 {
+                    Text(working > 0 ? "· \(idle) idle" : "\(idle) idle")
+                        .foregroundStyle(.secondary)
+                }
             }
             .font(.system(size: 11, weight: .medium))
             .padding(.horizontal, 7).padding(.vertical, 3)
@@ -326,7 +329,7 @@ private struct PaletteRow: View {
             // The dot marks a running process and its state; library-only
             // rows get an empty slot so titles stay aligned.
             Group {
-                if item.live?.status == "busy" {
+                if item.live?.isWorking == true {
                     PulsingDot(color: blue ? .white : dotColor, size: 8)
                 } else if item.live != nil {
                     Circle().fill(blue ? .white : dotColor)
@@ -375,15 +378,18 @@ private struct PaletteRow: View {
     }
 
     private func chipText(_ l: LiveSession) -> String {
-        l.status == "busy" ? "generating" : (l.waitingFor ?? l.status)
+        switch l.status {
+        case "busy": return "generating"
+        case "shell": return "running command"
+        default: return l.waitingFor ?? l.status
+        }
     }
 
     private var dotColor: Color {
         guard let l = item.live else { return .clear }
         switch l.status {
         case "waiting": return .orange
-        case "busy": return Theme.accent
-        case "shell": return .purple
+        case "busy", "shell": return Theme.accent
         default: return .green
         }
     }

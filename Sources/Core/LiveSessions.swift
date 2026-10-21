@@ -18,6 +18,10 @@ struct LiveSession: Identifiable, Hashable {
     let startedAt: Date
     let updatedAt: Date
 
+    /// Claude is working right now: generating (`busy`) or running a shell
+    /// command (`shell`). `idle` and `waiting` are not.
+    var isWorking: Bool { status == "busy" || status == "shell" }
+
     /// Ordering for the palette: sessions that need a human first.
     var statusRank: Int {
         switch status {
