@@ -2,15 +2,14 @@
 //
 // Keys: share:<id>            — manifest JSON (session metas, owner token hash)
 //       share:<id>:<n>        — gzipped jsonl body of session n
-// All keys carry a 30-day expirationTtl. Bodies are stored/served as opaque
-// bytes; the client decompresses with DecompressionStream.
+// Keys never expire; only the owner's DELETE removes them. Bodies are
+// stored/served as opaque bytes; the client decompresses with DecompressionStream.
 
 export interface Env {
   SHARES: KVNamespace;
   ASSETS: Fetcher;
 }
 
-const TTL_SECONDS = 30 * 24 * 3600;
 const MAX_SESSIONS = 100;
 const MAX_PART_BYTES = 24 * 1024 * 1024; // KV value limit is 25 MB
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
@@ -111,8 +110,8 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
       tokenHash: await sha256Hex(ownerToken),
       sessions,
     };
-    await env.SHARES.put(`share:${id}`, JSON.stringify(manifest), { expirationTtl: TTL_SECONDS });
-    return json({ id, ownerToken, ttlDays: TTL_SECONDS / 86400 });
+    await env.SHARES.put(`share:${id}`, JSON.stringify(manifest));
+    return json({ id, ownerToken });
   }
 
   const m = path.match(/^\/api\/share\/([^/]+)(?:\/([^/]+))?$/);
@@ -133,7 +132,7 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
     if (data.byteLength > MAX_PART_BYTES) {
       return err(413, `session too large gzipped (${Math.round(data.byteLength / 1e6)} MB, max ${MAX_PART_BYTES / 1e6} MB)`);
     }
-    await env.SHARES.put(`share:${id}:${n}`, data, { expirationTtl: TTL_SECONDS });
+    await env.SHARES.put(`share:${id}:${n}`, data);
     return json({ ok: true });
   }
 
@@ -142,14 +141,14 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
     const owner = await requireOwner(env, id, req);
     if (owner instanceof Response) return owner;
     owner.complete = true;
-    await env.SHARES.put(`share:${id}`, JSON.stringify(owner), { expirationTtl: TTL_SECONDS });
+    await env.SHARES.put(`share:${id}`, JSON.stringify(owner));
     return json({ ok: true });
   }
 
   // GET /api/share/:id — public manifest (without the token hash).
   if (sub === undefined && req.method === "GET") {
     const manifest = await loadManifest(env, id);
-    if (!manifest) return err(404, "share not found or expired");
+    if (!manifest) return err(404, "share not found");
     return json({
       createdAt: manifest.createdAt,
       complete: manifest.complete,
@@ -160,7 +159,7 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
   // GET /api/share/:id/:n — gzipped session body (opaque bytes).
   if (sub !== undefined && req.method === "GET") {
     const data = await env.SHARES.get(`share:${id}:${sub}`, "arrayBuffer");
-    if (!data) return err(404, "part not found or expired");
+    if (!data) return err(404, "part not found");
     return new Response(data, {
       headers: {
         "Content-Type": "application/octet-stream",
