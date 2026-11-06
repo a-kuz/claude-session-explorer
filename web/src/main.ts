@@ -272,7 +272,7 @@ function showShareDialog(url: string) {
   dlg.innerHTML = `
     <h3 style="margin-top:0">Share link</h3>
     <p style="color:var(--muted);font-size:12.5px">Anyone with the link can view
-    these sessions. Expires in 30 days.</p>
+    these sessions.</p>
     <input id="share-link" readonly>
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button id="share-copy" class="primary">Copy link</button>
