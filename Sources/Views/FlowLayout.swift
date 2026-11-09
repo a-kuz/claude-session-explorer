@@ -1,5 +1,10 @@
 import SwiftUI
 
+/// Expanded cards opt into the available row width; compact chips keep their ideal size.
+struct FlowFullWidthKey: LayoutValueKey {
+    static let defaultValue = false
+}
+
 /// A simple wrapping HStack: lays children left-to-right, wrapping to new rows.
 struct FlowLayout: Layout {
     var spacing: CGFloat = 7
@@ -40,7 +45,10 @@ struct FlowLayout: Layout {
         var x: CGFloat = 0
         var y: CGFloat = 0
         for (i, sub) in subviews.enumerated() {
-            let size = sub.sizeThatFits(.unspecified)
+            let fullWidth = sub[FlowFullWidthKey.self] && maxWidth.isFinite
+            let measured = sub.sizeThatFits(fullWidth
+                ? ProposedViewSize(width: maxWidth, height: nil) : .unspecified)
+            let size = CGSize(width: fullWidth ? maxWidth : measured.width, height: measured.height)
             if x + size.width > maxWidth, !current.items.isEmpty {
                 current.y = y
                 rows.append(current)
