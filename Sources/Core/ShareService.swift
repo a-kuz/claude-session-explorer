@@ -2,8 +2,9 @@
 // on Cloudflare Workers) and returning a public /s/<id> link.
 //
 // Protocol (see web/worker/index.ts): POST /api/share with session metas →
-// {id, ownerToken}; PUT /api/share/<id>/<n> with each gzipped jsonl body;
-// POST /api/share/<id>/complete. Owner tokens are kept in UserDefaults so a
+// {id, ownerToken}; PUT /api/share/<id>/<n>?chunk=<c> with each gzipped jsonl
+// body cut into chunks; POST /api/share/<id>/complete with the chunk count of
+// every session. Owner tokens are kept in UserDefaults so a
 // share the user created can later be deleted (DELETE /api/share/<id>).
 
 import Foundation
@@ -23,13 +24,15 @@ enum ShareService {
         var errorDescription: String? { message }
     }
 
-    /// Server-side cap on one gzipped session (KV value limit minus headroom).
-    private static let maxPartBytes = 24 * 1024 * 1024
+    /// Server-side cap on one stored chunk (KV value limit minus headroom).
+    private static let chunkBytes = 24 * 1024 * 1024
 
-    /// Upload `metas` and return the public share URL. `progress(done, total)`
-    /// is called after each uploaded session. Runs entirely off the main actor.
+    /// Upload `metas` and return the public share URL. `progress(done, total,
+    /// fraction)` is called after each uploaded chunk: sessions fully uploaded,
+    /// their total, and the overall 0…1 share of the work. Runs entirely off
+    /// the main actor.
     static func share(_ metas: [SessionMeta],
-                      progress: @escaping @Sendable (Int, Int) -> Void) async throws -> URL {
+                      progress: @escaping @Sendable (Int, Int, Double) -> Void) async throws -> URL {
         // 1. Create the share: manifest with light session metas.
         let sessions: [[String: Any]] = metas.map { m in
             [
@@ -48,29 +51,40 @@ enum ShareService {
         }
 
         // 2. Upload each session body, gzipped (the worker stores opaque bytes;
-        //    the web client decompresses with DecompressionStream).
+        //    the web client decompresses with DecompressionStream). The gzip
+        //    stream is cut into chunks of `chunkBytes`, one request each.
+        var chunkCounts: [Int] = []
         for (n, meta) in metas.enumerated() {
             let tmp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("se-share-\(id)-\(n).gz")
             defer { try? FileManager.default.removeItem(at: tmp) }
             guard Gzip.compress(file: meta.filePath, to: tmp),
-                  let data = try? Data(contentsOf: tmp) else {
+                  let size = (try? FileManager.default.attributesOfItem(atPath: tmp.path))?[.size] as? Int,
+                  size > 0,
+                  let handle = try? FileHandle(forReadingFrom: tmp) else {
                 throw ShareError(message: "failed to gzip \(AutoTitle.displayTitle(meta))")
             }
-            if data.count > maxPartBytes {
-                throw ShareError(message:
-                    "\(AutoTitle.displayTitle(meta)) is too large to share (\(data.count / 1_000_000) MB gzipped, max \(maxPartBytes / 1_000_000) MB)")
+            defer { try? handle.close() }
+            let count = (size + chunkBytes - 1) / chunkBytes
+            for c in 0..<count {
+                guard let data = try? handle.read(upToCount: chunkBytes), !data.isEmpty else {
+                    throw ShareError(message: "failed to read gzip of \(AutoTitle.displayTitle(meta))")
+                }
+                var req = request(path: "api/share/\(id)/\(n)", method: "PUT", query: "chunk=\(c)")
+                req.setValue(ownerToken, forHTTPHeaderField: "X-Owner-Token")
+                try await send(req, body: data)
+                let finished = c + 1 == count
+                progress(finished ? n + 1 : n, metas.count,
+                         (Double(n) + Double(c + 1) / Double(count)) / Double(metas.count))
             }
-            var req = request(path: "api/share/\(id)/\(n)", method: "PUT")
-            req.setValue(ownerToken, forHTTPHeaderField: "X-Owner-Token")
-            try await send(req, body: data)
-            progress(n + 1, metas.count)
+            chunkCounts.append(count)
         }
 
         // 3. Finalize.
         var done = request(path: "api/share/\(id)/complete", method: "POST")
         done.setValue(ownerToken, forHTTPHeaderField: "X-Owner-Token")
-        try await send(done, body: Data())
+        done.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        try await send(done, body: try JSONSerialization.data(withJSONObject: ["chunks": chunkCounts]))
 
         rememberOwnerToken(id: id, token: ownerToken)
         return baseURL.appendingPathComponent("s/\(id)")
@@ -115,8 +129,13 @@ enum ShareService {
 
     // MARK: - HTTP plumbing
 
-    private static func request(path: String, method: String) -> URLRequest {
-        var req = URLRequest(url: baseURL.appendingPathComponent(path))
+    private static func request(path: String, method: String, query: String? = nil) -> URLRequest {
+        var url = baseURL.appendingPathComponent(path)
+        if let query, var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            parts.query = query
+            url = parts.url ?? url
+        }
+        var req = URLRequest(url: url)
         req.httpMethod = method
         req.timeoutInterval = 120
         return req

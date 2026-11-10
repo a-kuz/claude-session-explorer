@@ -27,6 +27,9 @@ async function gunzip(data: ArrayBuffer): Promise<string> {
   return await new Response(stream).text();
 }
 
+/// One stored chunk of a gzipped body (the worker's KV value cap).
+const CHUNK_BYTES = 24 * 1024 * 1024;
+
 async function apiError(res: Response): Promise<string> {
   try {
     const body = (await res.json()) as { error?: string };
@@ -78,21 +81,27 @@ export async function createShare(
   const { id, ownerToken } = (await createRes.json()) as { id: string; ownerToken: string };
   rememberOwnerToken(id, ownerToken);
 
+  const chunks: number[] = [];
   for (let n = 0; n < entries.length; n++) {
     onProgress(n, entries.length);
     const body = await gzip(entries[n].text);
-    const putRes = await fetch(`/api/share/${id}/${n}`, {
-      method: "PUT",
-      headers: { "X-Owner-Token": ownerToken },
-      body,
-    });
-    if (!putRes.ok) throw new Error(`${entries[n].meta.fileName}: ${await apiError(putRes)}`);
+    const count = Math.max(1, Math.ceil(body.byteLength / CHUNK_BYTES));
+    for (let c = 0; c < count; c++) {
+      const putRes = await fetch(`/api/share/${id}/${n}?chunk=${c}`, {
+        method: "PUT",
+        headers: { "X-Owner-Token": ownerToken },
+        body: body.slice(c * CHUNK_BYTES, (c + 1) * CHUNK_BYTES),
+      });
+      if (!putRes.ok) throw new Error(`${entries[n].meta.fileName}: ${await apiError(putRes)}`);
+    }
+    chunks.push(count);
   }
   onProgress(entries.length, entries.length);
 
   const doneRes = await fetch(`/api/share/${id}/complete`, {
     method: "POST",
-    headers: { "X-Owner-Token": ownerToken },
+    headers: { "X-Owner-Token": ownerToken, "Content-Type": "application/json" },
+    body: JSON.stringify({ chunks }),
   });
   if (!doneRes.ok) throw new Error(await apiError(doneRes));
   return id;
