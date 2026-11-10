@@ -336,10 +336,30 @@ async function handleRead(
   return plainText(texts.join("\n"));
 }
 
+/** SHA-256 (as sent by the uploader) of every stored body chunk of a share,
+ *  keyed "<session>:<chunk>". */
+async function uploadedChunks(env: Env, id: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const prefix = `share:${id}:`;
+  let cursor: string | undefined;
+  do {
+    const page = await env.SHARES.list<{ sha?: string }>({ prefix, cursor });
+    for (const k of page.keys) {
+      const m = k.name.slice(prefix.length).match(/^(\d+)(?::(\d+))?$/);
+      if (m && k.metadata?.sha) out[`${m[1]}:${m[2] ?? "0"}`] = k.metadata.sha;
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+  return out;
+}
+
 async function handleApi(req: Request, env: Env, path: string): Promise<Response> {
   // POST /api/share — create a share: manifest with session metas, complete:false.
+  // With {resume: <id>} and that share's owner token, an unfinished share of
+  // the same sessions is continued instead: the response repeats its id and
+  // lists the chunks it already holds.
   if (path === "/api/share" && req.method === "POST") {
-    let body: { sessions?: unknown };
+    let body: { sessions?: unknown; resume?: unknown };
     try {
       body = await req.json();
     } catch {
@@ -362,6 +382,19 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
     const total = sessions.reduce((acc, s) => acc + s.bytes, 0);
     if (total > MAX_TOTAL_BYTES) {
       return err(400, `share too large (${Math.round(total / 1e6)} MB, max ${Math.round(MAX_TOTAL_BYTES / 1e6)} MB)`);
+    }
+    if (typeof body.resume === "string") {
+      const prev = await loadManifest(env, body.resume);
+      const token = req.headers.get("X-Owner-Token") ?? "";
+      if (prev && !prev.complete && token && (await sha256Hex(token)) === prev.tokenHash
+        && prev.sessions.length === sessions.length
+        && prev.sessions.every((s, n) => s.name === sessions[n].name)) {
+        prev.sessions = sessions;
+        await env.SHARES.put(`share:${body.resume}`, JSON.stringify(prev));
+        return json({
+          id: body.resume, ownerToken: token, uploaded: await uploadedChunks(env, body.resume),
+        });
+      }
     }
     const id = randomId();
     const ownerToken = randomId() + randomId();
@@ -392,7 +425,8 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
   const sub = m[2];
 
   // PUT /api/share/:id/:n[?chunk=c] — upload one chunk of a gzipped session
-  // body (chunk 0 when the parameter is absent).
+  // body (chunk 0 when the parameter is absent). The X-Chunk-SHA256 header is
+  // kept with the chunk for resumed uploads.
   if (sub !== undefined && sub !== "complete" && req.method === "PUT") {
     const n = Number(sub);
     const owner = await requireOwner(env, id, req);
@@ -401,25 +435,30 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
       return err(400, "part index out of range");
     }
     const params = new URL(req.url).searchParams;
+    // The body goes to KV as a stream: buffering 24 MB in the worker costs
+    // CPU time the free plan does not have.
+    const length = Number(req.headers.get("Content-Length") ?? "");
     const variant = params.get("text");
     if (variant !== null) {
       // PUT /api/share/:id/:n?text=<variant> — a gzipped transcript variant.
       if (!VARIANT_KEYS.includes(variant)) return err(400, "unknown transcript variant");
-      const text = await req.arrayBuffer();
-      if (text.byteLength === 0) return err(400, "empty body");
-      if (text.byteLength > MAX_CHUNK_BYTES) return err(413, "transcript too large");
-      await env.SHARES.put(textKey(id, n, variant), text);
+      if (!req.body || !(length > 0)) return err(400, "empty body");
+      if (length > MAX_CHUNK_BYTES) return err(413, "transcript too large");
+      await env.SHARES.put(textKey(id, n, variant), req.body);
       return json({ ok: true });
     }
     const chunkParam = params.get("chunk") ?? "0";
     const c = /^\d{1,3}$/.test(chunkParam) ? Number(chunkParam) : -1;
     if (c < 0 || c >= MAX_CHUNKS) return err(400, "chunk index out of range");
-    const data = await req.arrayBuffer();
-    if (data.byteLength === 0) return err(400, "empty body");
-    if (data.byteLength > MAX_CHUNK_BYTES) {
-      return err(413, `chunk too large (${Math.round(data.byteLength / 1e6)} MB, max ${Math.round(MAX_CHUNK_BYTES / 1e6)} MB)`);
+    if (!req.body || !(length > 0)) return err(400, "empty body");
+    if (length > MAX_CHUNK_BYTES) {
+      return err(413, `chunk too large (${Math.round(length / 1e6)} MB, max ${Math.round(MAX_CHUNK_BYTES / 1e6)} MB)`);
     }
-    await env.SHARES.put(chunkKey(id, n, c), data);
+    const sha = req.headers.get("X-Chunk-SHA256") ?? "";
+    await env.SHARES.put(
+      chunkKey(id, n, c), req.body,
+      /^[0-9a-f]{64}$/.test(sha) ? { metadata: { sha } } : undefined,
+    );
     return json({ ok: true });
   }
 

@@ -1604,7 +1604,7 @@ final class AppModel: ObservableObject {
 
     /// Lifecycle of a "Share by Link" upload; non-nil drives the share sheet.
     enum ShareState {
-        case uploading(done: Int, total: Int, fraction: Double)
+        case uploading(done: Int, total: Int, fraction: Double, detail: String)
         case done(URL)
         case failed(String)
     }
@@ -1625,13 +1625,13 @@ final class AppModel: ObservableObject {
     func shareSessions(_ ids: Set<String>) {
         let metas = orderedMetas(ids)
         guard !metas.isEmpty else { return }
-        shareState = .uploading(done: 0, total: metas.count, fraction: 0)
+        shareState = .uploading(done: 0, total: metas.count, fraction: 0, detail: "")
         Task.detached(priority: .userInitiated) {
             do {
-                let url = try await ShareService.share(metas) { done, total, fraction in
+                let url = try await ShareService.share(metas) { done, total, fraction, detail in
                     Task { @MainActor in
                         if case .uploading = self.shareState {
-                            self.shareState = .uploading(done: done, total: total, fraction: fraction)
+                            self.shareState = .uploading(done: done, total: total, fraction: fraction, detail: detail)
                         }
                     }
                 }

@@ -6,10 +6,12 @@
 import Foundation
 
 enum Gzip {
-    /// Compress `src` into `dst` (`gzip -9 -c src > dst`). Returns false on any
-    /// process or I/O failure; a partial `dst` is removed.
+    /// Compress `src` into `dst` (`gzip -9 -n -c src > dst`). Returns false on
+    /// any process or I/O failure; a partial `dst` is removed. `-n` leaves the
+    /// file name and mtime out of the header: the same content always gives
+    /// the same bytes, which resumed share uploads compare by hash.
     static func compress(file src: String, to dst: URL) -> Bool {
-        run(arguments: ["-9", "-c", src], writingTo: dst)
+        run(arguments: ["-9", "-n", "-c", src], writingTo: dst)
     }
 
     /// Decompress a `.gz` file into `dst` (`gzip -d -c src > dst`).

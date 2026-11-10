@@ -9,10 +9,11 @@ struct ShareSheetView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             switch model.shareState {
-            case .uploading(let done, let total, let fraction):
+            case .uploading(let done, let total, let fraction, let detail):
                 Text("Sharing sessions").font(.headline)
                 ProgressView(value: min(max(fraction, 0), 1)) {
-                    Text("Uploading \(done)/\(total)…")
+                    Text(detail.isEmpty ? "Uploading \(done)/\(total)…"
+                                        : "Uploading \(done)/\(total) · \(detail)")
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 .frame(width: 320)

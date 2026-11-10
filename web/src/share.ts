@@ -39,6 +39,45 @@ async function apiError(res: Response): Promise<string> {
   return `HTTP ${res.status}`;
 }
 
+async function sha256Hex(data: ArrayBuffer): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** fetch that repeats a request the network dropped (a thrown TypeError) or
+ *  the server failed (5xx, 429). */
+async function fetchRetrying(url: string, init: RequestInit): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const last = attempt >= 4;
+    try {
+      const res = await fetch(url, init);
+      if (last || (res.status < 500 && res.status !== 429)) return res;
+    } catch (err) {
+      if (last) throw err;
+    }
+    await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+  }
+}
+
+/// Unfinished uploads by session-set key, so a failed share continues with
+/// the chunks the server already holds.
+const PENDING_KEY = "se-pending-shares";
+
+function pendingShares(): Record<string, { id: string; token: string }> {
+  try {
+    return JSON.parse(localStorage.getItem(PENDING_KEY) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+
+function setPending(key: string, value: { id: string; token: string } | null) {
+  const all = pendingShares();
+  if (value) all[key] = value;
+  else delete all[key];
+  localStorage.setItem(PENDING_KEY, JSON.stringify(all));
+}
+
 const OWNER_KEY = "se-owner-tokens";
 
 function ownerTokens(): Record<string, string> {
@@ -64,10 +103,16 @@ export async function createShare(
   entries: SessionEntry[],
   onProgress: (done: number, total: number) => void,
 ): Promise<string> {
+  const pendingKey = entries.map((e) => e.meta.fileName).join("\n");
+  const pending = pendingShares()[pendingKey];
   const createRes = await fetch("/api/share", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(pending ? { "X-Owner-Token": pending.token } : {}),
+    },
     body: JSON.stringify({
+      resume: pending?.id,
       sessions: entries.map((e) => ({
         name: e.meta.fileName,
         title: displayTitle(e.meta),
@@ -79,8 +124,11 @@ export async function createShare(
     }),
   });
   if (!createRes.ok) throw new Error(await apiError(createRes));
-  const { id, ownerToken } = (await createRes.json()) as { id: string; ownerToken: string };
+  const { id, ownerToken, uploaded = {} } = (await createRes.json()) as {
+    id: string; ownerToken: string; uploaded?: Record<string, string>;
+  };
   rememberOwnerToken(id, ownerToken);
+  setPending(pendingKey, { id, token: ownerToken });
 
   const chunks: number[] = [];
   const texts: string[][] = [];
@@ -89,10 +137,13 @@ export async function createShare(
     const body = await gzip(entries[n].text);
     const count = Math.max(1, Math.ceil(body.byteLength / CHUNK_BYTES));
     for (let c = 0; c < count; c++) {
-      const putRes = await fetch(`/api/share/${id}/${n}?chunk=${c}`, {
+      const chunk = body.slice(c * CHUNK_BYTES, (c + 1) * CHUNK_BYTES);
+      const sha = await sha256Hex(chunk);
+      if (uploaded[`${n}:${c}`] === sha) continue;
+      const putRes = await fetchRetrying(`/api/share/${id}/${n}?chunk=${c}`, {
         method: "PUT",
-        headers: { "X-Owner-Token": ownerToken },
-        body: body.slice(c * CHUNK_BYTES, (c + 1) * CHUNK_BYTES),
+        headers: { "X-Owner-Token": ownerToken, "X-Chunk-SHA256": sha },
+        body: chunk,
       });
       if (!putRes.ok) throw new Error(`${entries[n].meta.fileName}: ${await apiError(putRes)}`);
     }
@@ -110,7 +161,7 @@ export async function createShare(
     for (const [key, text] of Object.entries(variants)) {
       const gz = await gzip(text);
       if (gz.byteLength > CHUNK_BYTES) continue;
-      const putRes = await fetch(`/api/share/${id}/${n}?text=${key}`, {
+      const putRes = await fetchRetrying(`/api/share/${id}/${n}?text=${key}`, {
         method: "PUT",
         headers: { "X-Owner-Token": ownerToken },
         body: gz,
@@ -128,6 +179,7 @@ export async function createShare(
     body: JSON.stringify({ chunks, texts }),
   });
   if (!doneRes.ok) throw new Error(await apiError(doneRes));
+  setPending(pendingKey, null);
   return id;
 }
 
