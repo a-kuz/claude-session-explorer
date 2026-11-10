@@ -624,7 +624,9 @@ final class AppModel: ObservableObject {
     /// state actually changed. The OPEN dialog is refreshed immediately and
     /// independently (that's the one the user is looking at).
     private func applySynced(_ sessions: [SessionMeta]) {
-        loading = false
+        // @Published notifies on every assignment, equal or not; this runs on
+        // each sync while any session is writing.
+        if loading { loading = false }
 
         // 1) Open dialog grows in real time — handle right away, no debounce.
         if let meta = selectedMeta {
@@ -654,7 +656,8 @@ final class AppModel: ObservableObject {
 
     /// True while the user is actively scrolling the session list — set by the
     /// list view; gates animated reorders so rows don't jump under the cursor.
-    @Published var listIsScrolling = false
+    /// Only polled by the coalescing task, so it publishes nothing.
+    var listIsScrolling = false
 
     private func flushPendingSynced() {
         guard let pending = pendingSynced else { return }

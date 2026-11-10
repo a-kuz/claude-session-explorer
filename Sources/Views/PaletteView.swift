@@ -428,7 +428,7 @@ private struct PalettePreviewPane: View {
                     // Pinned above the replies as a soft tinted card: regular
                     // weight, no rule. A long prompt or a pasted screenshot
                     // scrolls within its own band.
-                    let text = p.promptTurn.map { MessageContent.stripNoise($0.bodyText) } ?? p.promptText
+                    let text = p.promptText
                     if !text.isEmpty || !p.promptImages.isEmpty {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 8) {

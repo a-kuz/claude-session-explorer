@@ -194,6 +194,14 @@ enum Markdown {
     static func attributed(_ text: String, size: CGFloat, weight: SwiftUI.Font.Weight,
                            color: SwiftUI.Color, codeColor: SwiftUI.Color,
                            codeBg: SwiftUI.Color, linkColor: SwiftUI.Color) -> AttributedString {
+        let key = AttributedKey(text: text, size: size, weight: weight, color: color,
+                                codeColor: codeColor, codeBg: codeBg, linkColor: linkColor,
+                                proseFamily: DialogFonts.proseFamily,
+                                monoFamily: DialogFonts.monoFamily)
+        cacheLock.lock()
+        if let hit = attributedCache[key] { cacheLock.unlock(); return hit }
+        cacheLock.unlock()
+
         var out = AttributedString()
         for span in spans(text) {
             var piece = AttributedString(span.text)
@@ -209,8 +217,39 @@ enum Markdown {
             }
             out.append(piece)
         }
+
+        cacheLock.lock()
+        if attributedCache[key] == nil {
+            attributedCache[key] = out
+            attributedOrder.append(key)
+            if attributedOrder.count > attributedLimit {
+                // Evict the older half in one pass: removeFirst on every insert
+                // would shift the whole order array each time.
+                let drop = attributedOrder.prefix(attributedLimit / 2)
+                for k in drop { attributedCache[k] = nil }
+                attributedOrder.removeFirst(drop.count)
+            }
+        }
+        cacheLock.unlock()
         return out
     }
+
+    // The view body asks for the same paragraph every time its row is
+    // materialized while scrolling; the styled string depends only on these inputs.
+    private struct AttributedKey: Hashable {
+        let text: String
+        let size: CGFloat
+        let weight: SwiftUI.Font.Weight
+        let color: SwiftUI.Color
+        let codeColor: SwiftUI.Color
+        let codeBg: SwiftUI.Color
+        let linkColor: SwiftUI.Color
+        let proseFamily: String
+        let monoFamily: String
+    }
+    private static var attributedCache: [AttributedKey: AttributedString] = [:]
+    private static var attributedOrder: [AttributedKey] = []
+    private static let attributedLimit = 3000
 
     /// One styled inline span.
     struct Span {
@@ -225,6 +264,10 @@ enum Markdown {
     /// [text](url). Hand-rolled so spacing and code styling are predictable —
     /// the system markdown parser mangled both.
     static func spans(_ text: String) -> [Span] {
+        // Plain text (the common case) has no marker to pair: one span, no scan.
+        if !text.utf8.contains(where: { $0 == 0x60 || $0 == 0x2A || $0 == 0x5B }) {
+            return text.isEmpty ? [] : [Span(text: text)]
+        }
         var spans: [Span] = []
         let chars = Array(text)
         var i = 0
@@ -233,10 +276,14 @@ enum Markdown {
 
         func matchPaired(_ marker: String) -> Int? {
             let m = Array(marker)
-            guard i + m.count <= chars.count, Array(chars[i..<i+m.count]) == m else { return nil }
+            func matches(at p: Int) -> Bool {
+                for k in 0..<m.count where chars[p + k] != m[k] { return false }
+                return true
+            }
+            guard i + m.count <= chars.count, matches(at: i) else { return nil }
             var j = i + m.count
             while j + m.count <= chars.count {
-                if Array(chars[j..<j+m.count]) == m { return j }
+                if matches(at: j) { return j }
                 j += 1
             }
             return nil

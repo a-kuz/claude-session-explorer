@@ -717,17 +717,26 @@ struct MarkdownBlockView: View {
 
     /// Highlight each search token (case-insensitive) with a yellow background.
     private func applyHighlight(_ attr: inout AttributedString) {
-        let lower = String(attr.characters).lowercased()
-        for token in tokens where !token.isEmpty {
-            var start = lower.startIndex
-            while let r = lower.range(of: token, range: start..<lower.endIndex) {
-                let lo = lower.distance(from: lower.startIndex, to: r.lowerBound)
-                let hi = lower.distance(from: lower.startIndex, to: r.upperBound)
-                let aLo = attr.index(attr.startIndex, offsetByCharacters: lo)
-                let aHi = attr.index(attr.startIndex, offsetByCharacters: hi)
-                attr[aLo..<aHi].backgroundColor = Theme.highlight
-                start = r.upperBound
-            }
+        paintSearchHits(&attr, tokens: tokens)
+    }
+}
+
+/// Paints `Theme.highlight` behind every case-insensitive token hit. Matches of
+/// one token come in ascending order, so both indices advance from the previous
+/// hit instead of being recounted from the start of the text.
+private func paintSearchHits(_ attr: inout AttributedString, tokens: [String]) {
+    let lower = String(attr.characters).lowercased()
+    for token in tokens where !token.isEmpty {
+        var start = lower.startIndex
+        var seen = lower.startIndex
+        var aSeen = attr.startIndex
+        while let r = lower.range(of: token, range: start..<lower.endIndex) {
+            let aLo = attr.index(aSeen, offsetByCharacters: lower.distance(from: seen, to: r.lowerBound))
+            let aHi = attr.index(aLo, offsetByCharacters: lower.distance(from: r.lowerBound, to: r.upperBound))
+            attr[aLo..<aHi].backgroundColor = Theme.highlight
+            seen = r.upperBound
+            aSeen = aHi
+            start = r.upperBound
         }
     }
 }
@@ -772,20 +781,7 @@ private struct OversizedProse: View {
         var out = Markdown.attributed(
             t, size: size, weight: weight, color: color,
             codeColor: .secondary, codeBg: Theme.codeBg, linkColor: Theme.accent)
-        if !tokens.isEmpty {
-            let lower = String(out.characters).lowercased()
-            for token in tokens where !token.isEmpty {
-                var start = lower.startIndex
-                while let r = lower.range(of: token, range: start..<lower.endIndex) {
-                    let lo = lower.distance(from: lower.startIndex, to: r.lowerBound)
-                    let hi = lower.distance(from: lower.startIndex, to: r.upperBound)
-                    let aLo = out.index(out.startIndex, offsetByCharacters: lo)
-                    let aHi = out.index(out.startIndex, offsetByCharacters: hi)
-                    out[aLo..<aHi].backgroundColor = Theme.highlight
-                    start = r.upperBound
-                }
-            }
-        }
+        if !tokens.isEmpty { paintSearchHits(&out, tokens: tokens) }
         return out
     }
 }

@@ -158,7 +158,8 @@ struct PalettePreview {
     let promptTurn: DialogTurn?
     /// Images pasted into the prompt (base64 or cache-file refs).
     let promptImages: [NSImage]
-    /// Fallback heading when the prompt lies before the chunk that was read.
+    /// Heading text: the prompt with harness noise stripped, or the session's
+    /// last prompt when the prompt lies before the chunk that was read.
     let promptText: String
     let responses: [DialogTurn]
 }
@@ -195,7 +196,7 @@ extension Palette {
         return PalettePreview(
             promptTurn: prompt,
             promptImages: promptImages,
-            promptText: prompt?.bodyText ?? meta.lastUserText,
+            promptText: prompt.map { MessageContent.stripNoise($0.bodyText) } ?? meta.lastUserText,
             responses: prompt == nil ? block.turns : Array(block.turns.dropFirst()))
     }
 }

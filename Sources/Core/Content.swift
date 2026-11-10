@@ -126,7 +126,9 @@ enum MessageContent {
 
     /// Текст длиннее лимита? (тогда рендер обрежет и покажет кнопку разворота)
     static func isOversized(_ t: String) -> Bool {
-        maxRenderChars > 0 && t.count > maxRenderChars
+        // A string has at most as many characters as UTF-8 bytes, and the byte
+        // count is O(1); the O(n) character count runs only for long texts.
+        maxRenderChars > 0 && t.utf8.count > maxRenderChars && t.count > maxRenderChars
     }
     /// Голова текста для отображения (без пометок — её ставит View).
     static func clampHead(_ t: String) -> String {
@@ -317,6 +319,16 @@ enum MessageContent {
 
     /// Collapse whitespace and trim for single-line display.
     static func oneLine(_ text: String, max: Int = 400) -> String {
+        // Only the first `max` characters of the result are kept, so collapse a
+        // bounded head of the text and widen it until the result is long enough;
+        // a pasted prompt can run to hundreds of kilobytes.
+        var window = max * 4 + 64
+        while text.utf8.count > window {
+            let collapsed = applyReplace(whitespaceRun, " ", String(text.prefix(window)))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if collapsed.count > max { return String(collapsed.prefix(max)) }
+            window *= 4
+        }
         let collapsed = applyReplace(whitespaceRun, " ", text)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return collapsed.count > max ? String(collapsed.prefix(max)) : collapsed

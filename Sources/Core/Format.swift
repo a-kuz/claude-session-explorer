@@ -16,10 +16,7 @@ enum Format {
     }
 
     private static func relative(_ value: Int, _ unit: NSCalendar.Unit) -> String {
-        let f = DateComponentsFormatter()
-        f.unitsStyle = .abbreviated
-        f.allowedUnits = [unit]
-        f.maximumUnitCount = 1
+        let f = FormatterCache.components(unit)
         let interval: TimeInterval
         switch unit {
         case .minute: interval = Double(value) * 60
@@ -47,11 +44,7 @@ enum Format {
 
     /// Time only, e.g. "14:25" / "2:25 PM" depending on locale.
     static func timeOnly(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.locale = .current
-        f.dateStyle = .none
-        f.timeStyle = .short
-        return f.string(from: date)
+        FormatterCache.date(template: nil).string(from: date)
     }
 
     /// Time if the date is today, otherwise date + time.
@@ -98,10 +91,7 @@ enum Format {
 
     /// Locale-aware date formatting from a template (reorders fields per locale).
     private static func dateFormatted(_ date: Date, format template: String) -> String {
-        let f = DateFormatter()
-        f.locale = .current
-        f.setLocalizedDateFormatFromTemplate(template)
-        return f.string(from: date)
+        FormatterCache.date(template: template).string(from: date)
     }
 
     /// Human file size via the system byte-count formatter ("12 KB", "3.4 MB").
@@ -137,6 +127,53 @@ enum Format {
             return (.week, String(localized: "THIS WEEK"))
         }
         return (.older, dateFormatted(date, format: "LLLL yyyy").uppercased())
+    }
+}
+
+/// Formatters are costly to build (tens of µs each) and are asked for on every
+/// list row and outline row, so each configuration is built once and dropped
+/// when the system locale or time zone changes.
+private enum FormatterCache {
+    private static let lock = NSLock()
+    private static var dates: [String: DateFormatter] = [:]
+    private static var comps: [UInt: DateComponentsFormatter] = [:]
+    private static let observers: Void = {
+        for name in [NSLocale.currentLocaleDidChangeNotification,
+                     .NSSystemTimeZoneDidChange] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { _ in
+                lock.lock(); dates.removeAll(); comps.removeAll(); lock.unlock()
+            }
+        }
+    }()
+
+    /// `template == nil` → short time style; otherwise a localized template.
+    static func date(template: String?) -> DateFormatter {
+        _ = observers
+        let key = template ?? ""
+        lock.lock(); defer { lock.unlock() }
+        if let f = dates[key] { return f }
+        let f = DateFormatter()
+        f.locale = .current
+        if let template {
+            f.setLocalizedDateFormatFromTemplate(template)
+        } else {
+            f.dateStyle = .none
+            f.timeStyle = .short
+        }
+        dates[key] = f
+        return f
+    }
+
+    static func components(_ unit: NSCalendar.Unit) -> DateComponentsFormatter {
+        _ = observers
+        lock.lock(); defer { lock.unlock() }
+        if let f = comps[unit.rawValue] { return f }
+        let f = DateComponentsFormatter()
+        f.unitsStyle = .abbreviated
+        f.allowedUnits = [unit]
+        f.maximumUnitCount = 1
+        comps[unit.rawValue] = f
+        return f
     }
 }
 
