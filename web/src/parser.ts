@@ -3,12 +3,14 @@
 
 import {
   contentToText, extractContent, isMeaningfulUserText,
-  isToolResultContent, oneLine, stripNoise,
+  isToolResultContent, oneLine, queuedPrompt, stripNoise,
 } from "./content";
 import type { DialogMessage, SessionMeta } from "./types";
 
 function parseLine(line: string): Record<string, unknown> | null {
   if (!line) return null;
+  // API request logs: multi-megabyte lines that carry no transcript records.
+  if (line.startsWith('{"type":"api-request')) return null;
   try {
     const v = JSON.parse(line);
     return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : null;
@@ -96,6 +98,27 @@ export function parseSessionMeta(
         if (cwd === null && typeof rec.cwd === "string") cwd = rec.cwd;
         break;
       }
+      case "attachment": {
+        // Mid-turn user prompt (queued_command) — counts as a user turn.
+        const att = rec.isSidechain === true ? null : queuedPrompt(rec);
+        if (att) {
+          messageCount += 1;
+          const ts = parseDate(att.timestamp ?? rec.timestamp);
+          if (ts !== null) {
+            lastTs = ts;
+            if (firstTs === null) firstTs = ts;
+          }
+          const line = oneLine(stripNoise(contentToText(att.prompt)));
+          if (isMeaningfulUserText(line)) {
+            userTurnCount += 1;
+            if (!firstUserText) firstUserText = line;
+            lastUserText = line;
+            if (ts !== null) lastUserTs = ts;
+          }
+        }
+        if (cwd === null && typeof rec.cwd === "string") cwd = rec.cwd;
+        break;
+      }
       default:
         if (cwd === null && typeof rec.cwd === "string") cwd = rec.cwd;
     }
@@ -122,36 +145,54 @@ export function parseSessionMeta(
   };
 }
 
-/** Fully parse jsonl text into an ordered list of dialog messages. */
-export function parseDialog(text: string): DialogMessage[] {
-  const messages: DialogMessage[] = [];
-  const resultsByID = new Map<string, string>();
-  let index = 0;
+/** Incremental jsonl → dialog messages: feed lines in file order, then
+ *  `finish()`. With `keepImages` false image payloads are dropped (see
+ *  `extractContent`). */
+export class DialogParser {
+  private messages: DialogMessage[] = [];
+  private resultsByID = new Map<string, string>();
+  private resultImagesByID = new Map<string, string[]>();
+  private index = 0;
 
-  for (const rawLine of text.split("\n")) {
+  constructor(private keepImages = true) {}
+
+  push(rawLine: string) {
     const rec = parseLine(rawLine.trim());
-    if (!rec) continue;
+    if (!rec) return;
+    if (rec.isSidechain === true) return;
     const type = rec.type;
-    if (type !== "user" && type !== "assistant") continue;
-    if (rec.isSidechain === true) continue;
 
-    const msg = rec.message as Record<string, unknown> | undefined;
-    const c = msg?.content;
+    let c: unknown;
+    let role: "user" | "assistant";
+    let timestamp = rec.timestamp;
+    if (type === "user" || type === "assistant") {
+      c = (rec.message as Record<string, unknown> | undefined)?.content;
+      role = type;
+    } else {
+      // A prompt sent mid-turn exists only as this attachment record.
+      const att = queuedPrompt(rec);
+      if (!att) return;
+      c = att.prompt;
+      role = "user";
+      if (typeof att.timestamp === "string") timestamp = att.timestamp;
+    }
+
     const msgText = contentToText(c).trim();
-    const ex = extractContent(c);
-    for (const [k, v] of ex.resultsByID) resultsByID.set(k, v);
+    const ex = extractContent(c, this.keepImages);
+    for (const [k, v] of ex.resultsByID) this.resultsByID.set(k, v);
+    for (const [k, v] of ex.resultImagesByID) this.resultImagesByID.set(k, v);
     if (!msgText && ex.toolUses.length === 0 && ex.toolResults.length === 0 && ex.imageCount === 0) {
-      continue;
+      return;
     }
 
     const isToolOrMeta = type === "user" && (rec.isMeta === true || isToolResultContent(c));
     const recUUID = typeof rec.uuid === "string" ? rec.uuid : "";
-    messages.push({
-      id: recUUID || `msg-${index}`,
+    this.messages.push({
+      id: recUUID || `msg-${this.index}`,
       uuid: recUUID,
-      role: type,
+      role,
       text: msgText,
-      timestamp: parseDate(rec.timestamp),
+      timestamp: parseDate(timestamp),
       isToolOrMeta,
       toolUses: ex.toolUses,
       toolResults: ex.toolResults,
@@ -160,15 +201,27 @@ export function parseDialog(text: string): DialogMessage[] {
       pieces: ex.pieces,
       images: ex.images,
     });
-    index += 1;
+    this.index += 1;
   }
 
-  // Link each tool call to its result (results arrive in later messages).
-  for (const m of messages) {
-    for (const t of m.toolUses) {
-      const out = t.toolUseID ? resultsByID.get(t.toolUseID) : undefined;
-      if (out) t.output = out;
+  finish(): DialogMessage[] {
+    // Link each tool call to its result (results arrive in later messages).
+    for (const m of this.messages) {
+      for (const t of m.toolUses) {
+        if (!t.toolUseID) continue;
+        const out = this.resultsByID.get(t.toolUseID);
+        if (out) t.output = out;
+        const imgs = this.resultImagesByID.get(t.toolUseID);
+        if (imgs) t.images = imgs;
+      }
     }
+    return this.messages;
   }
-  return messages;
+}
+
+/** Fully parse jsonl text into an ordered list of dialog messages. */
+export function parseDialog(text: string): DialogMessage[] {
+  const parser = new DialogParser();
+  for (const rawLine of text.split("\n")) parser.push(rawLine);
+  return parser.finish();
 }

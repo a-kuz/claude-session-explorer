@@ -105,8 +105,10 @@ function stepNode(tool: ToolUse): HTMLElement {
     }
     body = el("div", "step-body");
     appendInput(body, tool);
-    if (tool.output) {
-      body.append(el("h4", undefined, "Result"), clampedPre(tool.output));
+    // An image-only result has just the "[image]" placeholder as its text.
+    const output = tool.images.length ? tool.output.replaceAll("[image]", "").trim() : tool.output;
+    if (output) {
+      body.append(el("h4", undefined, "Result"), clampedPre(output));
     }
     if (!body.childElementCount) body.append(el("h4", undefined, "No details"));
     step.append(body);
@@ -142,12 +144,28 @@ function timeLabel(ts: number | null): string {
   });
 }
 
+/// Full-size view of a thumbnail: a modal that closes on click or Esc.
+function openLightbox(src: string) {
+  const dlg = el("dialog", "lightbox");
+  const img = el("img");
+  img.src = src;
+  dlg.append(img);
+  dlg.addEventListener("click", () => dlg.close());
+  dlg.addEventListener("close", () => dlg.remove());
+  document.body.append(dlg);
+  dlg.showModal();
+}
+
 function imagesNode(images: string[]): HTMLElement {
   const wrap = el("div", "msg-images");
   for (const src of images) {
     const img = el("img");
     img.src = src;
     img.loading = "lazy";
+    img.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openLightbox(src);
+    });
     wrap.append(img);
   }
   return wrap;
@@ -233,8 +251,14 @@ export function renderDialog(
         const node = el("div", "turn-assistant");
         // Consecutive tool segments render as one collapsed group.
         let run: ToolUse[] = [];
+        // Images the tools returned (screenshots, read image files) stay
+        // visible right under the collapsed group.
         const flushRun = () => {
-          if (run.length) node.append(toolGroupNode(run));
+          if (run.length) {
+            node.append(toolGroupNode(run));
+            const shots = run.flatMap((t) => t.images);
+            if (shots.length) node.append(imagesNode(shots));
+          }
           run = [];
         };
         for (const seg of turn.segments) {

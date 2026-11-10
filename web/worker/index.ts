@@ -4,6 +4,17 @@
 //       share:<id>:<n>        — gzipped jsonl body of session n
 // Keys never expire; only the owner's DELETE removes them. Bodies are
 // stored/served as opaque bytes; the client decompresses with DecompressionStream.
+//
+// Read API for scripts (session = index in the manifest, or its session id):
+//   GET /api/share/<id>/text            — transcripts of every session
+//   GET /api/share/<id>/<session>/text  — transcript of one session
+//       ?tools=none|brief|full (default brief) — tool calls: omitted, one
+//       line each, or with input and result
+//   GET /api/share/<id>/<session>/jsonl — the decompressed jsonl
+
+import { DialogParser } from "../src/parser";
+import { transcriptText, type ToolDetail } from "../src/transcript";
+import { buildBlocks, buildTurns } from "../src/turns";
 
 export interface Env {
   SHARES: KVNamespace;
@@ -74,6 +85,97 @@ async function requireOwner(env: Env, id: string, req: Request): Promise<Manifes
   return manifest;
 }
 
+/** Manifest index of a session addressed by index or by session id / file name. */
+function sessionIndex(manifest: Manifest, ref: string): number {
+  if (/^\d+$/.test(ref)) {
+    const n = Number(ref);
+    return n < manifest.sessions.length ? n : -1;
+  }
+  return manifest.sessions.findIndex((s) => s.name === ref || s.name === `${ref}.jsonl`);
+}
+
+async function partTextStream(env: Env, id: string, n: number): Promise<ReadableStream<Uint8Array> | null> {
+  const gz = await env.SHARES.get(`share:${id}:${n}`, "stream");
+  if (!gz) return null;
+  return gz.pipeThrough(new DecompressionStream("gzip")) as ReadableStream<Uint8Array>;
+}
+
+/** Transcript of one stored session, parsed line by line off the
+ *  decompression stream (the jsonl is never held in memory whole). */
+async function sessionTranscript(
+  env: Env, id: string, manifest: Manifest, n: number, tools: ToolDetail,
+): Promise<string | null> {
+  const stream = await partTextStream(env, id, n);
+  if (!stream) return null;
+  const parser = new DialogParser(false);
+  const decoder = new TextDecoder();
+  let buf = "";
+  let scanned = 0;
+  const reader = stream.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    buf += done ? decoder.decode() : decoder.decode(value, { stream: true });
+    let start = 0;
+    for (;;) {
+      const nl = buf.indexOf("\n", Math.max(start, scanned));
+      if (nl < 0) break;
+      parser.push(buf.slice(start, nl));
+      start = nl + 1;
+    }
+    buf = buf.slice(start);
+    scanned = buf.length;
+    if (done) break;
+  }
+  parser.push(buf);
+  const s = manifest.sessions[n];
+  return transcriptText(
+    { title: s.title, project: s.project, sessionId: s.name.replace(/\.jsonl$/, "") },
+    buildBlocks(buildTurns(parser.finish())),
+    tools,
+  );
+}
+
+function plainText(body: string): Response {
+  return new Response(body, { headers: { "Content-Type": "text/plain; charset=utf-8" } });
+}
+
+async function handleRead(
+  req: Request, env: Env, id: string, ref: string | undefined, kind: string,
+): Promise<Response> {
+  const manifest = await loadManifest(env, id);
+  if (!manifest) return err(404, "share not found");
+
+  if (kind === "jsonl") {
+    const n = sessionIndex(manifest, ref ?? "");
+    if (n < 0) return err(404, "session not found");
+    const stream = await partTextStream(env, id, n);
+    if (!stream) return err(404, "part not found");
+    return new Response(stream, {
+      headers: { "Content-Type": "application/x-ndjson; charset=utf-8" },
+    });
+  }
+
+  const tools = new URL(req.url).searchParams.get("tools") ?? "brief";
+  if (tools !== "none" && tools !== "brief" && tools !== "full") {
+    return err(400, "tools must be none, brief or full");
+  }
+  let indexes: number[];
+  if (ref === undefined) {
+    indexes = manifest.sessions.map((_, n) => n);
+  } else {
+    const n = sessionIndex(manifest, ref);
+    if (n < 0) return err(404, "session not found");
+    indexes = [n];
+  }
+  const texts: string[] = [];
+  for (const n of indexes) {
+    const text = await sessionTranscript(env, id, manifest, n, tools);
+    if (text === null) return err(404, "part not found");
+    texts.push(text);
+  }
+  return plainText(texts.join("\n"));
+}
+
 async function handleApi(req: Request, env: Env, path: string): Promise<Response> {
   // POST /api/share — create a share: manifest with session metas, complete:false.
   if (path === "/api/share" && req.method === "POST") {
@@ -114,9 +216,17 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
     return json({ id, ownerToken });
   }
 
-  const m = path.match(/^\/api\/share\/([^/]+)(?:\/([^/]+))?$/);
+  const m = path.match(/^\/api\/share\/([^/]+)(?:\/([^/]+))?(?:\/([^/]+))?$/);
   if (!m) return err(404, "no such endpoint");
   const id = m[1];
+
+  // Text read API: /text for the whole share, /<session>/text|jsonl for one.
+  if (m[3] !== undefined || m[2] === "text") {
+    const kind = m[3] ?? "text";
+    if (kind !== "text" && kind !== "jsonl") return err(404, "no such endpoint");
+    if (req.method !== "GET") return err(405, "method not allowed");
+    return handleRead(req, env, id, m[3] === undefined ? undefined : m[2], kind);
+  }
   const sub = m[2];
 
   // PUT /api/share/:id/:n — upload one gzipped session body.

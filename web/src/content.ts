@@ -92,13 +92,24 @@ export interface ExtractedContent {
   images: string[];
   /** tool_use_id → result text carried by this (user) message. */
   resultsByID: Map<string, string>;
+  /** tool_use_id → data-URLs of the image blocks inside that tool_result. */
+  resultImagesByID: Map<string, string[]>;
 }
 
-/** Split a message's content into prose, tool calls, and tool results. */
-export function extractContent(content: unknown): ExtractedContent {
+/** data-URL of an inline base64 `image` block, or null for any other source. */
+function imageDataURL(block: Record<string, unknown>, keepImages: boolean): string | null {
+  const src = block.source as Record<string, unknown> | undefined;
+  if (!src || typeof src.data !== "string" || typeof src.media_type !== "string") return null;
+  return keepImages ? `data:${src.media_type};base64,${src.data}` : "";
+}
+
+/** Split a message's content into prose, tool calls, and tool results.
+ *  With `keepImages` false every image is an empty-string placeholder: the
+ *  count and position survive, the base64 payload is not retained. */
+export function extractContent(content: unknown, keepImages = true): ExtractedContent {
   const out: ExtractedContent = {
     bodyText: "", toolUses: [], toolResults: [], imageCount: 0,
-    pieces: [], images: [], resultsByID: new Map(),
+    pieces: [], images: [], resultsByID: new Map(), resultImagesByID: new Map(),
   };
   if (typeof content === "string") {
     out.bodyText = content.trim();
@@ -133,10 +144,8 @@ export function extractContent(content: unknown): ExtractedContent {
         break;
       case "image": {
         out.imageCount += 1;
-        const src = b.source as Record<string, unknown> | undefined;
-        if (src && typeof src.data === "string" && typeof src.media_type === "string") {
-          out.images.push(`data:${src.media_type};base64,${src.data}`);
-        }
+        const url = imageDataURL(b, keepImages);
+        if (url !== null) out.images.push(url);
         break;
       }
       case "document":
@@ -153,6 +162,7 @@ export function extractContent(content: unknown): ExtractedContent {
             : null,
           toolUseID: typeof b.id === "string" ? b.id : "",
           output: "",
+          images: [],
         };
         out.toolUses.push(tool);
         out.pieces.push({ kind: "tool", tool });
@@ -161,7 +171,20 @@ export function extractContent(content: unknown): ExtractedContent {
       case "tool_result": {
         const txt = contentToText(b.content);
         out.toolResults.push(txt);
-        if (typeof b.tool_use_id === "string") out.resultsByID.set(b.tool_use_id, txt);
+        if (typeof b.tool_use_id === "string") {
+          out.resultsByID.set(b.tool_use_id, txt);
+          if (Array.isArray(b.content)) {
+            const urls: string[] = [];
+            for (const inner of b.content) {
+              if (typeof inner !== "object" || inner === null) continue;
+              const ib = inner as Record<string, unknown>;
+              if (ib.type !== "image") continue;
+              const url = imageDataURL(ib, keepImages);
+              if (url !== null) urls.push(url);
+            }
+            if (urls.length) out.resultImagesByID.set(b.tool_use_id, urls);
+          }
+        }
         break;
       }
       case "thinking": break;
@@ -183,11 +206,28 @@ export function stripImageRefs(text: string): string {
   return text.replace(imageRefRe, "").trim();
 }
 
+/** The `attachment` payload of a human mid-turn prompt, or null. A prompt
+ *  queued while Claude is working is recorded as `type:"attachment"` /
+ *  `attachment.type:"queued_command"` and has no `type:"user"` record;
+ *  `prompt` has the shape of `message.content` (string | blocks). */
+export function queuedPrompt(rec: Record<string, unknown>): Record<string, unknown> | null {
+  if (rec.type !== "attachment") return null;
+  const att = rec.attachment;
+  if (typeof att !== "object" || att === null) return null;
+  const a = att as Record<string, unknown>;
+  if (a.type !== "queued_command" || a.commandMode === "task-notification" || a.isMeta === true) {
+    return null;
+  }
+  return a;
+}
+
 /** Does this content represent a tool_result / meta payload (not a typed prompt)? */
 export function isToolResultContent(content: unknown): boolean {
   if (!Array.isArray(content)) return false;
   const blocks = content.filter((b) => typeof b === "object" && b !== null) as Record<string, unknown>[];
   if (blocks.length === 0) return false;
+  // Nothing but images is a pasted attachment: a prompt of its own.
+  if (blocks.every((b) => b.type === "image")) return false;
   return blocks.every((b) => b.type === "tool_result" || b.type === "image" || b.type === "document");
 }
 
@@ -207,6 +247,7 @@ const noiseRemovals: RegExp[] = [
   /<<autonomous-loop[^>]*>>/g,
   /\[Image #\d+\]/g,
   /\[Image: source: [^\]]+\]/g,
+  /\[Image: original \d+x\d+, displayed at [^\]]*\]/g,
   /\[image\]/g,
   /\[document\]/g,
   /<\/?bash-input>/g,

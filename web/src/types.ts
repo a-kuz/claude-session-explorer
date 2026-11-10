@@ -15,6 +15,8 @@ export interface ToolUse {
   toolUseID: string;
   /// Result text of the call (filled by linking tool_result later).
   output: string;
+  /// base64 data-URLs of image blocks in the call's tool_result.
+  images: string[];
 }
 
 export type ContentPiece =

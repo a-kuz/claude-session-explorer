@@ -6,10 +6,12 @@
 import { stripNoise } from "./content";
 import type { DialogBlock, DialogMessage, DialogTurn, TurnSegment } from "./types";
 
-/** A user message that carries a genuine typed prompt (not tool plumbing). */
+/** A user message that carries a genuine typed prompt (not tool plumbing).
+ *  An image-only paste has no prose (its text is just "[Image #1]", which
+ *  stripNoise removes), so inline images count as prompt content too. */
 export function isRealUserPrompt(m: DialogMessage): boolean {
   if (m.role !== "user" || m.isToolOrMeta) return false;
-  return stripNoise(m.bodyText).length > 0;
+  return stripNoise(m.bodyText).length > 0 || m.images.length > 0;
 }
 
 export function buildTurns(messages: DialogMessage[]): DialogTurn[] {
@@ -41,7 +43,9 @@ export function buildTurns(messages: DialogMessage[]): DialogTurn[] {
           orderedPieces.push(p);
         }
       }
-      images.push(...m.images);
+      // A user-role record swallowed into an assistant run is plumbing: its
+      // images are not part of Claude's reply.
+      if (asUser || m.role === "assistant") images.push(...m.images);
       if (firstTimestamp === null) firstTimestamp = m.timestamp;
     };
 
