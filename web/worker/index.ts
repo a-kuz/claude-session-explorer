@@ -11,6 +11,9 @@
 //       ?tools=none|brief|full (default brief) — tool calls: omitted, one
 //       line each, or with input and result
 //       ?thinking=0 — leave Claude's thinking blocks out
+//       Images appear as markdown links to the image endpoint below.
+//   GET /api/share/<id>/<session>/image/<k> — the session's k-th inline
+//       image (0-based, file order), decoded
 //   GET /api/share/<id>/<session>/jsonl — the decompressed jsonl
 
 import { DialogParser } from "../src/parser";
@@ -101,14 +104,14 @@ async function partTextStream(env: Env, id: string, n: number): Promise<Readable
   return gz.pipeThrough(new DecompressionStream("gzip")) as ReadableStream<Uint8Array>;
 }
 
-/** Transcript of one stored session, parsed line by line off the
- *  decompression stream (the jsonl is never held in memory whole). */
-async function sessionTranscript(
-  env: Env, id: string, manifest: Manifest, n: number, tools: ToolDetail, thinking: boolean,
-): Promise<string | null> {
+/** Feed a stored session's jsonl to `onLine` line by line off the
+ *  decompression stream (the jsonl is never held in memory whole). `onLine`
+ *  returning true stops the read. False when the part does not exist. */
+async function eachLine(
+  env: Env, id: string, n: number, onLine: (line: string) => boolean | void,
+): Promise<boolean> {
   const stream = await partTextStream(env, id, n);
-  if (!stream) return null;
-  const parser = new DialogParser(false);
+  if (!stream) return false;
   const decoder = new TextDecoder();
   let buf = "";
   let scanned = 0;
@@ -120,14 +123,28 @@ async function sessionTranscript(
     for (;;) {
       const nl = buf.indexOf("\n", Math.max(start, scanned));
       if (nl < 0) break;
-      parser.push(buf.slice(start, nl));
+      if (onLine(buf.slice(start, nl))) {
+        await reader.cancel();
+        return true;
+      }
       start = nl + 1;
     }
     buf = buf.slice(start);
     scanned = buf.length;
     if (done) break;
   }
-  parser.push(buf);
+  onLine(buf);
+  return true;
+}
+
+/** Transcript of one stored session; images become links to `imageBase/<k>`. */
+async function sessionTranscript(
+  env: Env, id: string, manifest: Manifest, n: number, tools: ToolDetail, thinking: boolean,
+  imageBase: string,
+): Promise<string | null> {
+  let imageIndex = 0;
+  const parser = new DialogParser(() => `${imageBase}/${imageIndex++}`);
+  if (!(await eachLine(env, id, n, (line) => parser.push(line)))) return null;
   const s = manifest.sessions[n];
   return transcriptText(
     { title: s.title, project: s.project, sessionId: s.name.replace(/\.jsonl$/, "") },
@@ -137,15 +154,54 @@ async function sessionTranscript(
   );
 }
 
+/// Media types served as-is; any other inline image goes out as a download.
+const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+async function sessionImage(env: Env, id: string, n: number, k: number): Promise<Response> {
+  let imageIndex = 0;
+  let found: { mediaType: string; data: string } | null = null;
+  const parser = new DialogParser((mediaType, data) => {
+    if (imageIndex++ === k) found = { mediaType, data };
+    return "";
+  });
+  const exists = await eachLine(env, id, n, (line) => {
+    parser.push(line);
+    return found !== null;
+  });
+  if (!exists) return err(404, "part not found");
+  const hit = found as { mediaType: string; data: string } | null;
+  if (!hit) return err(404, "image not found");
+  let bytes: Uint8Array;
+  try {
+    bytes = Uint8Array.from(atob(hit.data), (c) => c.charCodeAt(0));
+  } catch {
+    return err(404, "image not found");
+  }
+  return new Response(bytes, {
+    headers: {
+      "Content-Type": IMAGE_TYPES.has(hit.mediaType) ? hit.mediaType : "application/octet-stream",
+      "X-Content-Type-Options": "nosniff",
+      "Cache-Control": "private, max-age=3600",
+    },
+  });
+}
+
 function plainText(body: string): Response {
   return new Response(body, { headers: { "Content-Type": "text/plain; charset=utf-8" } });
 }
 
 async function handleRead(
-  req: Request, env: Env, id: string, ref: string | undefined, kind: string,
+  req: Request, env: Env, id: string, ref: string | undefined, kind: string, arg?: string,
 ): Promise<Response> {
   const manifest = await loadManifest(env, id);
   if (!manifest) return err(404, "share not found");
+
+  if (kind === "image") {
+    const n = sessionIndex(manifest, ref ?? "");
+    if (n < 0) return err(404, "session not found");
+    if (arg === undefined || !/^\d{1,6}$/.test(arg)) return err(404, "image not found");
+    return sessionImage(env, id, n, Number(arg));
+  }
 
   if (kind === "jsonl") {
     const n = sessionIndex(manifest, ref ?? "");
@@ -177,7 +233,8 @@ async function handleRead(
   }
   const texts: string[] = [];
   for (const n of indexes) {
-    const text = await sessionTranscript(env, id, manifest, n, tools, thinking);
+    const imageBase = `${new URL(req.url).origin}/api/share/${id}/${n}/image`;
+    const text = await sessionTranscript(env, id, manifest, n, tools, thinking, imageBase);
     if (text === null) return err(404, "part not found");
     texts.push(text);
   }
@@ -224,16 +281,18 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
     return json({ id, ownerToken });
   }
 
-  const m = path.match(/^\/api\/share\/([^/]+)(?:\/([^/]+))?(?:\/([^/]+))?$/);
+  const m = path.match(/^\/api\/share\/([^/]+)(?:\/([^/]+))?(?:\/([^/]+))?(?:\/([^/]+))?$/);
   if (!m) return err(404, "no such endpoint");
   const id = m[1];
 
-  // Text read API: /text for the whole share, /<session>/text|jsonl for one.
+  // Read API: /text for the whole share, /<session>/text|jsonl|image/<k> for one.
   if (m[3] !== undefined || m[2] === "text") {
     const kind = m[3] ?? "text";
-    if (kind !== "text" && kind !== "jsonl") return err(404, "no such endpoint");
+    const known = kind === "image" ? m[4] !== undefined : m[4] === undefined
+      && (kind === "text" || kind === "jsonl");
+    if (!known) return err(404, "no such endpoint");
     if (req.method !== "GET") return err(405, "method not allowed");
-    return handleRead(req, env, id, m[3] === undefined ? undefined : m[2], kind);
+    return handleRead(req, env, id, m[3] === undefined ? undefined : m[2], kind, m[4]);
   }
   const sub = m[2];
 

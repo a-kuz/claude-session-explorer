@@ -71,7 +71,7 @@ export interface SessionEntry {
 
 /// One ordered segment of a turn: prose, a thinking block or a tool call, in sequence.
 export type TurnSegment =
-  | { kind: "prose"; id: string; text: string }
+  | { kind: "prose"; id: string; text: string; timestamp: number | null }
   | { kind: "thinking"; id: string; text: string }
   | { kind: "tool"; tool: ToolUse };
 

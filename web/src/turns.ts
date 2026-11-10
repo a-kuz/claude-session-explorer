@@ -26,7 +26,11 @@ export function buildTurns(messages: DialogMessage[]): DialogTurn[] {
     const images: string[] = [];
     let firstTimestamp: number | null = starter.timestamp;
     let lastProseTimestamp: number | null = null;
-    const orderedPieces: DialogMessage["pieces"] = [];
+    // Text pieces carry the timestamp of the record they came from.
+    const orderedPieces: (
+      | Exclude<DialogMessage["pieces"][number], { kind: "text" }>
+      | { kind: "text"; text: string; timestamp: number | null }
+    )[] = [];
 
     const absorb = (m: DialogMessage) => {
       const body = stripNoise(m.bodyText);
@@ -38,7 +42,7 @@ export function buildTurns(messages: DialogMessage[]): DialogTurn[] {
       for (const p of m.pieces) {
         if (p.kind === "text") {
           const s = stripNoise(p.text);
-          if (s) orderedPieces.push({ kind: "text", text: s });
+          if (s) orderedPieces.push({ kind: "text", text: s, timestamp: m.timestamp });
         } else {
           orderedPieces.push(p);
         }
@@ -63,6 +67,7 @@ export function buildTurns(messages: DialogMessage[]): DialogTurn[] {
     // Contiguous text runs become one prose segment; tools stay in place.
     const segments: TurnSegment[] = [];
     let pendingText: string[] = [];
+    let pendingTimestamp: number | null = null;
     let proseCounter = 0;
     let thinkingCounter = 0;
     const flushProse = () => {
@@ -71,12 +76,14 @@ export function buildTurns(messages: DialogMessage[]): DialogTurn[] {
         kind: "prose",
         id: `${starter.id}-${proseCounter}`,
         text: pendingText.join("\n\n"),
+        timestamp: pendingTimestamp,
       });
       proseCounter += 1;
       pendingText = [];
     };
     for (const p of orderedPieces) {
       if (p.kind === "text") {
+        if (pendingText.length === 0) pendingTimestamp = p.timestamp;
         pendingText.push(p.text);
       } else if (p.kind === "thinking") {
         flushProse();

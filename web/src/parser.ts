@@ -2,8 +2,8 @@
 // Port of Sources/Core/Loader.swift (in-memory text instead of file I/O).
 
 import {
-  contentToText, extractContent, isMeaningfulUserText,
-  isToolResultContent, oneLine, queuedPrompt, stripNoise,
+  contentToText, dataURLSink, extractContent, isMeaningfulUserText,
+  isToolResultContent, oneLine, queuedPrompt, stripNoise, type ImageSink,
 } from "./content";
 import type { DialogMessage, SessionMeta } from "./types";
 
@@ -146,15 +146,15 @@ export function parseSessionMeta(
 }
 
 /** Incremental jsonl → dialog messages: feed lines in file order, then
- *  `finish()`. With `keepImages` false image payloads are dropped (see
- *  `extractContent`). */
+ *  `finish()`. `sink` decides what is kept of each inline image (see
+ *  `ImageSink`); it sees the session's images in file order. */
 export class DialogParser {
   private messages: DialogMessage[] = [];
   private resultsByID = new Map<string, string>();
   private resultImagesByID = new Map<string, string[]>();
   private index = 0;
 
-  constructor(private keepImages = true) {}
+  constructor(private sink: ImageSink = dataURLSink) {}
 
   push(rawLine: string) {
     const rec = parseLine(rawLine.trim());
@@ -178,7 +178,7 @@ export class DialogParser {
     }
 
     const msgText = contentToText(c).trim();
-    const ex = extractContent(c, this.keepImages);
+    const ex = extractContent(c, this.sink);
     for (const [k, v] of ex.resultsByID) this.resultsByID.set(k, v);
     for (const [k, v] of ex.resultImagesByID) this.resultImagesByID.set(k, v);
     if (!msgText && ex.toolUses.length === 0 && ex.toolResults.length === 0

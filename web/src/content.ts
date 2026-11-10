@@ -88,25 +88,29 @@ export interface ExtractedContent {
   toolResults: string[];
   imageCount: number;
   pieces: ContentPiece[];
-  /** base64 data-URLs of inline image blocks, in order. */
+  /** Inline image blocks as the sink's strings (data-URLs by default), in order. */
   images: string[];
   /** tool_use_id → result text carried by this (user) message. */
   resultsByID: Map<string, string>;
-  /** tool_use_id → data-URLs of the image blocks inside that tool_result. */
+  /** tool_use_id → sink strings of the image blocks inside that tool_result. */
   resultImagesByID: Map<string, string[]>;
 }
 
-/** data-URL of an inline base64 `image` block, or null for any other source. */
-function imageDataURL(block: Record<string, unknown>, keepImages: boolean): string | null {
+/** Turns one inline base64 image into the string kept in `images`. Called
+ *  once per image, in content order. */
+export type ImageSink = (mediaType: string, data: string) => string;
+
+export const dataURLSink: ImageSink = (mediaType, data) => `data:${mediaType};base64,${data}`;
+
+/** The sink's string for an inline base64 `image` block, or null for any other source. */
+function imageRef(block: Record<string, unknown>, sink: ImageSink): string | null {
   const src = block.source as Record<string, unknown> | undefined;
   if (!src || typeof src.data !== "string" || typeof src.media_type !== "string") return null;
-  return keepImages ? `data:${src.media_type};base64,${src.data}` : "";
+  return sink(src.media_type, src.data);
 }
 
-/** Split a message's content into prose, tool calls, and tool results.
- *  With `keepImages` false every image is an empty-string placeholder: the
- *  count and position survive, the base64 payload is not retained. */
-export function extractContent(content: unknown, keepImages = true): ExtractedContent {
+/** Split a message's content into prose, tool calls, and tool results. */
+export function extractContent(content: unknown, sink: ImageSink = dataURLSink): ExtractedContent {
   const out: ExtractedContent = {
     bodyText: "", toolUses: [], toolResults: [], imageCount: 0,
     pieces: [], images: [], resultsByID: new Map(), resultImagesByID: new Map(),
@@ -144,7 +148,7 @@ export function extractContent(content: unknown, keepImages = true): ExtractedCo
         break;
       case "image": {
         out.imageCount += 1;
-        const url = imageDataURL(b, keepImages);
+        const url = imageRef(b, sink);
         if (url !== null) out.images.push(url);
         break;
       }
@@ -179,7 +183,7 @@ export function extractContent(content: unknown, keepImages = true): ExtractedCo
               if (typeof inner !== "object" || inner === null) continue;
               const ib = inner as Record<string, unknown>;
               if (ib.type !== "image") continue;
-              const url = imageDataURL(ib, keepImages);
+              const url = imageRef(ib, sink);
               if (url !== null) urls.push(url);
             }
             if (urls.length) out.resultImagesByID.set(b.tool_use_id, urls);
