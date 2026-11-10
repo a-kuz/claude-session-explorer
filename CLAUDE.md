@@ -31,6 +31,10 @@ xcodebuild -project SessionExplorer.xcodeproj -scheme SessionExplorer -configura
 
 There are no tests in the project.
 
+`Sources/Resources/transcript.js` is a build artifact of `web/src/variants.ts`
+(the app runs it in JavaScriptCore to build share transcripts). After changing
+the web transcript/parser code: `cd web && pnpm build:jsc`, then rebuild the app.
+
 ## Session format (jsonl)
 
 One `<session-id>.jsonl` file per session, append-only, one record per line. The file

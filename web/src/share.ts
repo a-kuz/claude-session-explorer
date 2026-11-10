@@ -3,6 +3,7 @@
 
 import type { SessionEntry } from "./types";
 import { displayTitle } from "./autotitle";
+import { VariantBuilder } from "./variants";
 
 export interface ShareManifest {
   createdAt: number;
@@ -82,6 +83,7 @@ export async function createShare(
   rememberOwnerToken(id, ownerToken);
 
   const chunks: number[] = [];
+  const texts: string[][] = [];
   for (let n = 0; n < entries.length; n++) {
     onProgress(n, entries.length);
     const body = await gzip(entries[n].text);
@@ -95,13 +97,35 @@ export async function createShare(
       if (!putRes.ok) throw new Error(`${entries[n].meta.fileName}: ${await apiError(putRes)}`);
     }
     chunks.push(count);
+
+    // Transcript variants for the text API, so the worker serves them as stored.
+    const builder = new VariantBuilder(`${location.origin}/api/share/${id}/${n}/image`);
+    for (const line of entries[n].text.split("\n")) builder.push(line);
+    const variants = builder.finish({
+      title: displayTitle(entries[n].meta),
+      project: entries[n].meta.projectPath,
+      sessionId: entries[n].meta.fileName.replace(/\.jsonl$/, ""),
+    });
+    const stored: string[] = [];
+    for (const [key, text] of Object.entries(variants)) {
+      const gz = await gzip(text);
+      if (gz.byteLength > CHUNK_BYTES) continue;
+      const putRes = await fetch(`/api/share/${id}/${n}?text=${key}`, {
+        method: "PUT",
+        headers: { "X-Owner-Token": ownerToken },
+        body: gz,
+      });
+      if (!putRes.ok) throw new Error(`${entries[n].meta.fileName}: ${await apiError(putRes)}`);
+      stored.push(key);
+    }
+    texts.push(stored);
   }
   onProgress(entries.length, entries.length);
 
   const doneRes = await fetch(`/api/share/${id}/complete`, {
     method: "POST",
     headers: { "X-Owner-Token": ownerToken, "Content-Type": "application/json" },
-    body: JSON.stringify({ chunks }),
+    body: JSON.stringify({ chunks, texts }),
   });
   if (!doneRes.ok) throw new Error(await apiError(doneRes));
   return id;

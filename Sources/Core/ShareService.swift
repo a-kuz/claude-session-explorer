@@ -3,8 +3,9 @@
 //
 // Protocol (see web/worker/index.ts): POST /api/share with session metas →
 // {id, ownerToken}; PUT /api/share/<id>/<n>?chunk=<c> with each gzipped jsonl
-// body cut into chunks; POST /api/share/<id>/complete with the chunk count of
-// every session. Owner tokens are kept in UserDefaults so a
+// body cut into chunks, and PUT /api/share/<id>/<n>?text=<variant> with each
+// gzipped transcript variant; POST /api/share/<id>/complete with the chunk
+// count and the stored variants of every session. Owner tokens are kept in UserDefaults so a
 // share the user created can later be deleted (DELETE /api/share/<id>).
 
 import Foundation
@@ -54,6 +55,7 @@ enum ShareService {
         //    the web client decompresses with DecompressionStream). The gzip
         //    stream is cut into chunks of `chunkBytes`, one request each.
         var chunkCounts: [Int] = []
+        var storedTexts: [[String]] = []
         for (n, meta) in metas.enumerated() {
             let tmp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("se-share-\(id)-\(n).gz")
@@ -78,16 +80,52 @@ enum ShareService {
                          (Double(n) + Double(c + 1) / Double(count)) / Double(metas.count))
             }
             chunkCounts.append(count)
+            storedTexts.append(try await uploadTranscripts(
+                meta, shareID: id, index: n, ownerToken: ownerToken))
         }
 
         // 3. Finalize.
         var done = request(path: "api/share/\(id)/complete", method: "POST")
         done.setValue(ownerToken, forHTTPHeaderField: "X-Owner-Token")
         done.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        try await send(done, body: try JSONSerialization.data(withJSONObject: ["chunks": chunkCounts]))
+        try await send(done, body: try JSONSerialization.data(withJSONObject: ["chunks": chunkCounts, "texts": storedTexts]))
 
         rememberOwnerToken(id: id, token: ownerToken)
         return baseURL.appendingPathComponent("s/\(id)")
+    }
+
+    /// Build the session's transcript variants and upload each gzipped; returns
+    /// the keys of the stored ones. A session whose transcript cannot be built
+    /// is shared without them: the server then computes the text on request.
+    private static func uploadTranscripts(_ meta: SessionMeta, shareID id: String, index n: Int,
+                                          ownerToken: String) async throws -> [String] {
+        let name = (meta.filePath as NSString).lastPathComponent
+        guard let variants = ShareTranscript.variants(
+            filePath: meta.filePath,
+            title: AutoTitle.displayTitle(meta),
+            project: meta.projectPath,
+            sessionId: (name as NSString).deletingPathExtension,
+            imageBase: baseURL.appendingPathComponent("api/share/\(id)/\(n)/image").absoluteString
+        ) else { return [] }
+        var stored: [String] = []
+        for key in variants.keys.sorted() {
+            let dir = FileManager.default.temporaryDirectory
+            let txt = dir.appendingPathComponent("se-share-\(id)-\(n)-\(key).txt")
+            let gz = dir.appendingPathComponent("se-share-\(id)-\(n)-\(key).txt.gz")
+            defer {
+                try? FileManager.default.removeItem(at: txt)
+                try? FileManager.default.removeItem(at: gz)
+            }
+            guard (try? Data(variants[key]!.utf8).write(to: txt)) != nil,
+                  Gzip.compress(file: txt.path, to: gz),
+                  let data = try? Data(contentsOf: gz),
+                  !data.isEmpty, data.count <= chunkBytes else { continue }
+            var req = request(path: "api/share/\(id)/\(n)", method: "PUT", query: "text=\(key)")
+            req.setValue(ownerToken, forHTTPHeaderField: "X-Owner-Token")
+            try await send(req, body: data)
+            stored.append(key)
+        }
+        return stored
     }
 
     /// Delete a share this app created earlier. Throws if no owner token is known.

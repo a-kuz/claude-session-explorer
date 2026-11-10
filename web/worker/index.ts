@@ -4,6 +4,8 @@
 //       share:<id>:<n>        — gzipped jsonl body of session n, chunk 0
 //       share:<id>:<n>:<c>    — chunk c ≥ 1 of the same gzip stream (a body
 //                               over one KV value is split by the uploader)
+//       share:<id>:<n>:t:<v>  — gzipped transcript of session n, variant v
+//                               (see ../src/variants.ts), built by the uploader
 // Keys never expire; only the owner's DELETE removes them. Bodies are
 // stored/served as opaque bytes; the client decompresses with DecompressionStream.
 //
@@ -21,6 +23,7 @@
 import { DialogParser } from "../src/parser";
 import { transcriptText, type ToolDetail } from "../src/transcript";
 import { buildBlocks, buildTurns } from "../src/turns";
+import { VARIANT_KEYS, variantKey } from "../src/variants";
 
 export interface Env {
   SHARES: KVNamespace;
@@ -41,6 +44,8 @@ interface ManifestSession {
   bytes: number;
   /** Number of stored chunks of the gzipped body; absent means 1. */
   chunks?: number;
+  /** Variant keys of the transcripts stored for this session. */
+  texts?: string[];
 }
 
 interface Manifest {
@@ -107,16 +112,22 @@ function chunkKey(id: string, n: number, c: number): string {
   return c === 0 ? `share:${id}:${n}` : `share:${id}:${n}:${c}`;
 }
 
-/** The gzipped body of session n: its chunks read one after another. */
-async function partGzStream(
-  env: Env, id: string, manifest: Manifest, n: number,
-): Promise<ReadableStream<Uint8Array> | null> {
-  const count = manifest.sessions[n]?.chunks ?? 1;
-  const first = await env.SHARES.get(chunkKey(id, n, 0), "stream");
+function textKey(id: string, n: number, variant: string): string {
+  return `share:${id}:${n}:t:${variant}`;
+}
+
+type ByteStream = ReadableStream<Uint8Array>;
+
+/** `count` streams read one after another, each opened when the previous one
+ *  ends; `separator` goes between them. Null when the first does not exist. */
+async function concatStreams(
+  count: number, open: (i: number) => Promise<ByteStream | null>, separator?: Uint8Array,
+): Promise<ByteStream | null> {
+  const first = await open(0);
   if (!first) return null;
-  if (count === 1) return first as ReadableStream<Uint8Array>;
-  let c = 0;
-  let reader = (first as ReadableStream<Uint8Array>).getReader();
+  if (count === 1) return first;
+  let i = 0;
+  let reader = first.getReader();
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       for (;;) {
@@ -125,23 +136,55 @@ async function partGzStream(
           controller.enqueue(value);
           return;
         }
-        c++;
-        if (c >= count) {
+        i++;
+        if (i >= count) {
           controller.close();
           return;
         }
-        const next = await env.SHARES.get(chunkKey(id, n, c), "stream");
+        const next = await open(i);
         if (!next) {
-          controller.error(new Error(`chunk ${c} of part ${n} missing`));
+          controller.error(new Error(`stream ${i} of ${count} missing`));
           return;
         }
-        reader = (next as ReadableStream<Uint8Array>).getReader();
+        reader = next.getReader();
+        if (separator) {
+          controller.enqueue(separator);
+          return;
+        }
       }
     },
     cancel(reason) {
       return reader.cancel(reason);
     },
   });
+}
+
+/** The gzipped body of session n: its chunks read one after another. */
+function partGzStream(
+  env: Env, id: string, manifest: Manifest, n: number,
+): Promise<ByteStream | null> {
+  return concatStreams(
+    manifest.sessions[n]?.chunks ?? 1,
+    async (c) => (await env.SHARES.get(chunkKey(id, n, c), "stream")) as ByteStream | null,
+  );
+}
+
+/** The stored transcripts of `indexes` in one variant, joined the way the
+ *  computed ones are. Null unless every one of the sessions has that variant. */
+function storedTranscripts(
+  env: Env, id: string, manifest: Manifest, indexes: number[], variant: string,
+): Promise<ByteStream | null> {
+  if (!indexes.every((n) => manifest.sessions[n].texts?.includes(variant))) {
+    return Promise.resolve(null);
+  }
+  return concatStreams(
+    indexes.length,
+    async (i) => {
+      const gz = await env.SHARES.get(textKey(id, indexes[i], variant), "stream");
+      return gz ? (gz.pipeThrough(new DecompressionStream("gzip")) as ByteStream) : null;
+    },
+    new TextEncoder().encode("\n"),
+  );
 }
 
 async function partTextStream(
@@ -236,7 +279,7 @@ async function sessionImage(
   });
 }
 
-function plainText(body: string): Response {
+function plainText(body: string | ByteStream): Response {
   return new Response(body, { headers: { "Content-Type": "text/plain; charset=utf-8" } });
 }
 
@@ -281,6 +324,8 @@ async function handleRead(
     if (n < 0) return err(404, "session not found");
     indexes = [n];
   }
+  const stored = await storedTranscripts(env, id, manifest, indexes, variantKey(tools, thinking));
+  if (stored) return plainText(stored);
   const texts: string[] = [];
   for (const n of indexes) {
     const imageBase = `${new URL(req.url).origin}/api/share/${id}/${n}/image`;
@@ -355,7 +400,18 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
     if (!Number.isInteger(n) || n < 0 || n >= owner.sessions.length) {
       return err(400, "part index out of range");
     }
-    const chunkParam = new URL(req.url).searchParams.get("chunk") ?? "0";
+    const params = new URL(req.url).searchParams;
+    const variant = params.get("text");
+    if (variant !== null) {
+      // PUT /api/share/:id/:n?text=<variant> — a gzipped transcript variant.
+      if (!VARIANT_KEYS.includes(variant)) return err(400, "unknown transcript variant");
+      const text = await req.arrayBuffer();
+      if (text.byteLength === 0) return err(400, "empty body");
+      if (text.byteLength > MAX_CHUNK_BYTES) return err(413, "transcript too large");
+      await env.SHARES.put(textKey(id, n, variant), text);
+      return json({ ok: true });
+    }
+    const chunkParam = params.get("chunk") ?? "0";
     const c = /^\d{1,3}$/.test(chunkParam) ? Number(chunkParam) : -1;
     if (c < 0 || c >= MAX_CHUNKS) return err(400, "chunk index out of range");
     const data = await req.arrayBuffer();
@@ -368,17 +424,30 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
   }
 
   // POST /api/share/:id/complete — mark all parts uploaded. An optional
-  // {chunks: number[]} body gives the chunk count of each session.
+  // {chunks: number[], texts: string[][]} body gives, per session, the chunk
+  // count and the variant keys of the uploaded transcripts.
   if (sub === "complete" && req.method === "POST") {
     const owner = await requireOwner(env, id, req);
     if (owner instanceof Response) return owner;
     const raw = await req.text();
     if (raw !== "") {
       let chunks: unknown;
+      let texts: unknown;
       try {
-        chunks = (JSON.parse(raw) as { chunks?: unknown })?.chunks;
+        const body = JSON.parse(raw) as { chunks?: unknown; texts?: unknown };
+        chunks = body?.chunks;
+        texts = body?.texts;
       } catch {
         return err(400, "invalid JSON");
+      }
+      if (texts !== undefined) {
+        if (!Array.isArray(texts) || texts.length !== owner.sessions.length
+          || !texts.every((t) => Array.isArray(t) && t.every((v) => VARIANT_KEYS.includes(v)))) {
+          return err(400, "texts must list variant keys per session");
+        }
+        owner.sessions.forEach((s, n) => {
+          s.texts = texts[n];
+        });
       }
       if (chunks !== undefined) {
         if (!Array.isArray(chunks) || chunks.length !== owner.sessions.length
