@@ -40,10 +40,16 @@ function toolLines(tool: ToolUse, detail: ToolDetail): string[] {
   return out;
 }
 
+/** Thinking as a markdown blockquote, so it reads apart from the reply. */
+function thinkingQuote(text: string): string {
+  return ["> Thinking:", ...text.split("\n").map((l) => (l ? `> ${l}` : ">"))].join("\n");
+}
+
 export function transcriptText(
   head: TranscriptHead,
   blocks: DialogBlock[],
   tools: ToolDetail,
+  thinking: boolean,
 ): string {
   const parts: string[] = [`# ${head.title || head.sessionId}`];
   const info = [
@@ -72,6 +78,11 @@ export function transcriptText(
         if (seg.kind === "prose") {
           flushRun();
           body.push(seg.text);
+        } else if (seg.kind === "thinking") {
+          if (thinking) {
+            flushRun();
+            body.push(thinkingQuote(seg.text));
+          }
         } else if (tools === "brief") {
           run.push(...toolLines(seg.tool, tools));
         } else if (tools === "full") {

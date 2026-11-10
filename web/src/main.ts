@@ -364,6 +364,9 @@ async function bootShared(id: string) {
       });
       banner.append(del);
     }
+    // One shared session: the list column, its search box and the mobile
+    // "back to list" button have nothing to offer.
+    document.body.classList.toggle("single-session", entries.length === 1);
     refresh();
     if (entries.length) select(entries[0].meta.id);
   } catch (err) {

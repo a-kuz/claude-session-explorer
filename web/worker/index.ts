@@ -10,6 +10,7 @@
 //   GET /api/share/<id>/<session>/text  — transcript of one session
 //       ?tools=none|brief|full (default brief) — tool calls: omitted, one
 //       line each, or with input and result
+//       ?thinking=0 — leave Claude's thinking blocks out
 //   GET /api/share/<id>/<session>/jsonl — the decompressed jsonl
 
 import { DialogParser } from "../src/parser";
@@ -103,7 +104,7 @@ async function partTextStream(env: Env, id: string, n: number): Promise<Readable
 /** Transcript of one stored session, parsed line by line off the
  *  decompression stream (the jsonl is never held in memory whole). */
 async function sessionTranscript(
-  env: Env, id: string, manifest: Manifest, n: number, tools: ToolDetail,
+  env: Env, id: string, manifest: Manifest, n: number, tools: ToolDetail, thinking: boolean,
 ): Promise<string | null> {
   const stream = await partTextStream(env, id, n);
   if (!stream) return null;
@@ -132,6 +133,7 @@ async function sessionTranscript(
     { title: s.title, project: s.project, sessionId: s.name.replace(/\.jsonl$/, "") },
     buildBlocks(buildTurns(parser.finish())),
     tools,
+    thinking,
   );
 }
 
@@ -155,10 +157,16 @@ async function handleRead(
     });
   }
 
-  const tools = new URL(req.url).searchParams.get("tools") ?? "brief";
+  const params = new URL(req.url).searchParams;
+  const tools = params.get("tools") ?? "brief";
   if (tools !== "none" && tools !== "brief" && tools !== "full") {
     return err(400, "tools must be none, brief or full");
   }
+  const thinkingParam = params.get("thinking") ?? "1";
+  if (thinkingParam !== "0" && thinkingParam !== "1") {
+    return err(400, "thinking must be 0 or 1");
+  }
+  const thinking = thinkingParam === "1";
   let indexes: number[];
   if (ref === undefined) {
     indexes = manifest.sessions.map((_, n) => n);
@@ -169,7 +177,7 @@ async function handleRead(
   }
   const texts: string[] = [];
   for (const n of indexes) {
-    const text = await sessionTranscript(env, id, manifest, n, tools);
+    const text = await sessionTranscript(env, id, manifest, n, tools, thinking);
     if (text === null) return err(404, "part not found");
     texts.push(text);
   }

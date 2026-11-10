@@ -187,7 +187,11 @@ export function extractContent(content: unknown, keepImages = true): ExtractedCo
         }
         break;
       }
-      case "thinking": break;
+      case "thinking": {
+        const t = typeof b.thinking === "string" ? b.thinking.trim() : "";
+        if (t) out.pieces.push({ kind: "thinking", text: t });
+        break;
+      }
       default:
         if (typeof b.text === "string") handleText(b.text);
     }

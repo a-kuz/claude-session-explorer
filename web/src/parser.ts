@@ -181,7 +181,8 @@ export class DialogParser {
     const ex = extractContent(c, this.keepImages);
     for (const [k, v] of ex.resultsByID) this.resultsByID.set(k, v);
     for (const [k, v] of ex.resultImagesByID) this.resultImagesByID.set(k, v);
-    if (!msgText && ex.toolUses.length === 0 && ex.toolResults.length === 0 && ex.imageCount === 0) {
+    if (!msgText && ex.toolUses.length === 0 && ex.toolResults.length === 0
+      && ex.imageCount === 0 && ex.pieces.length === 0) {
       return;
     }
 

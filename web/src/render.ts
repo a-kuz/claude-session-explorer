@@ -4,7 +4,10 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { displayTitle } from "./autotitle";
 import { oneLine } from "./content";
-import type { DialogBlock, SessionEntry, ToolUse } from "./types";
+import type { DialogBlock, SessionEntry, ToolUse, TurnSegment } from "./types";
+
+/// A non-prose segment: the unit of a collapsed step group.
+type Step = Exclude<TurnSegment, { kind: "prose" }>;
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -116,23 +119,48 @@ function stepNode(tool: ToolUse): HTMLElement {
   return step;
 }
 
-/// A run of consecutive tool calls collapsed into one group (v.be style):
-/// the header lists the steps comma-separated (ellipsized) with a count;
-/// clicking it unfolds the step list.
-function toolGroupNode(tools: ToolUse[]): HTMLElement {
+/// One thinking block as a step row: the first line as a preview; clicking
+/// the row lazily unfolds the whole text.
+function thinkingStepNode(text: string): HTMLElement {
+  const step = el("div", "tool-step thinking-step");
+  const line = el("div", "step-line");
+  line.append(
+    el("span", "step-ic", "✻"),
+    el("span", "step-name", "Thinking"),
+    el("span", "step-lbl", oneLine(text, 100)),
+  );
+  step.append(line);
+  let body: HTMLElement | null = null;
+  line.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (body) {
+      body.hidden = !body.hidden;
+      return;
+    }
+    body = el("div", "step-body");
+    body.append(proseNode(text));
+    step.append(body);
+  });
+  return step;
+}
+
+/// A run of consecutive thinking blocks and tool calls collapsed into one
+/// group (v.be style): the header lists the tool steps comma-separated
+/// (ellipsized) with a count; clicking it unfolds the step list.
+function stepGroupNode(steps: Step[]): HTMLElement {
   const box = el("div", "tool-group");
   const head = el("div", "tg-head");
-  const summary = tools
-    .map((t) => t.label || t.name + (t.arg ? ` ${t.arg}` : ""))
-    .join(", ");
-  head.append(
-    el("span", "tg-chev", "▸"),
-    el("span", "tg-summary", summary),
-    el("span", "tg-count", String(tools.length)),
-  );
+  const tools = steps.flatMap((s) => (s.kind === "tool" ? [s.tool] : []));
+  const summary = tools.length
+    ? tools.map((t) => t.label || t.name + (t.arg ? ` ${t.arg}` : "")).join(", ")
+    : `Thinking: ${oneLine(steps[0].kind === "thinking" ? steps[0].text : "", 200)}`;
+  head.append(el("span", "tg-chev", "▸"), el("span", "tg-summary", summary));
+  if (tools.length) head.append(el("span", "tg-count", String(tools.length)));
   head.addEventListener("click", () => box.classList.toggle("open"));
   const list = el("div", "tg-list");
-  for (const t of tools) list.append(stepNode(t));
+  for (const s of steps) {
+    list.append(s.kind === "tool" ? stepNode(s.tool) : thinkingStepNode(s.text));
+  }
   box.append(head, list);
   return box;
 }
@@ -249,21 +277,21 @@ export function renderDialog(
         promptWrap.append(el("div", "prompt-sentinel"), node);
       } else {
         const node = el("div", "turn-assistant");
-        // Consecutive tool segments render as one collapsed group.
-        let run: ToolUse[] = [];
+        // Consecutive thinking/tool segments render as one collapsed group.
+        let run: Step[] = [];
         // Images the tools returned (screenshots, read image files) stay
         // visible right under the collapsed group.
         const flushRun = () => {
           if (run.length) {
-            node.append(toolGroupNode(run));
-            const shots = run.flatMap((t) => t.images);
+            node.append(stepGroupNode(run));
+            const shots = run.flatMap((s) => (s.kind === "tool" ? s.tool.images : []));
             if (shots.length) node.append(imagesNode(shots));
           }
           run = [];
         };
         for (const seg of turn.segments) {
-          if (seg.kind === "tool") {
-            run.push(seg.tool);
+          if (seg.kind !== "prose") {
+            run.push(seg);
           } else {
             flushRun();
             node.append(proseNode(seg.text));

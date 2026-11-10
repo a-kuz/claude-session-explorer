@@ -64,6 +64,7 @@ export function buildTurns(messages: DialogMessage[]): DialogTurn[] {
     const segments: TurnSegment[] = [];
     let pendingText: string[] = [];
     let proseCounter = 0;
+    let thinkingCounter = 0;
     const flushProse = () => {
       if (pendingText.length === 0) return;
       segments.push({
@@ -75,12 +76,20 @@ export function buildTurns(messages: DialogMessage[]): DialogTurn[] {
       pendingText = [];
     };
     for (const p of orderedPieces) {
-      if (p.kind === "text") pendingText.push(p.text);
-      else { flushProse(); segments.push({ kind: "tool", tool: p.tool }); }
+      if (p.kind === "text") {
+        pendingText.push(p.text);
+      } else if (p.kind === "thinking") {
+        flushProse();
+        segments.push({ kind: "thinking", id: `${starter.id}-t${thinkingCounter}`, text: p.text });
+        thinkingCounter += 1;
+      } else {
+        flushProse();
+        segments.push({ kind: "tool", tool: p.tool });
+      }
     }
     flushProse();
 
-    if (chunks.length > 0 || tools.length > 0 || images.length > 0) {
+    if (chunks.length > 0 || tools.length > 0 || images.length > 0 || segments.length > 0) {
       turns.push({
         id: starter.id,
         role: asUser ? "user" : "assistant",

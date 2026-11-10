@@ -21,6 +21,7 @@ export interface ToolUse {
 
 export type ContentPiece =
   | { kind: "text"; text: string }
+  | { kind: "thinking"; text: string }
   | { kind: "tool"; tool: ToolUse };
 
 export type Role = "user" | "assistant";
@@ -68,9 +69,10 @@ export interface SessionEntry {
   readOnly: boolean;
 }
 
-/// One ordered segment of a turn: prose html or a tool call, in sequence.
+/// One ordered segment of a turn: prose, a thinking block or a tool call, in sequence.
 export type TurnSegment =
   | { kind: "prose"; id: string; text: string }
+  | { kind: "thinking"; id: string; text: string }
   | { kind: "tool"; tool: ToolUse };
 
 export interface DialogTurn {
