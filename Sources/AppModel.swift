@@ -156,7 +156,15 @@ final class AppModel: ObservableObject {
         let want: Set<String> = selectedID.map { [$0] } ?? []
         if listSelection != want { listSelection = want }
     }
-    @Published private(set) var dialog: SessionDialog?
+    @Published private(set) var dialog: SessionDialog? {
+        didSet { messageIndexByID = nil }
+    }
+    /// id → index into `dialog.messages` (first occurrence), built on first use
+    /// after the dialog changes. Every visible block's `BranchBar` looks its
+    /// message up on each model update.
+    private var messageIndexByID: [String: Int]?
+    /// Ids of all rendered turns, built on first use after `blocks` change.
+    private var renderedTurnIDs: Set<String>?
     /// Merged turns derived from the dialog (one per speaker change).
     @Published private(set) var turns: [DialogTurn] = []
     /// Turns grouped into "prompt + following Claude turns" blocks — the unit of
@@ -164,7 +172,7 @@ final class AppModel: ObservableObject {
     /// here (once per blocks change) so per-scroll-frame and per-keypress paths
     /// stay O(1) instead of re-filtering the whole list on big sessions.
     @Published private(set) var blocks: [DialogBlock] = [] {
-        didSet { rebuildNavCache(); rebuildSessionImageItems() }
+        didSet { renderedTurnIDs = nil; rebuildNavCache(); rebuildSessionImageItems() }
     }
 
     /// Blocks led by a real user prompt — the navigable replies. Cached.
@@ -1272,10 +1280,18 @@ final class AppModel: ObservableObject {
     /// `messageID` is a turn/block id (a message uuid). Empty when not a branch.
     func branchAlternatives(forFirstMessageID messageID: String) -> [BranchAlternative] {
         guard let d = dialog, let g = branchGraph else { return [] }
-        guard let m = d.messages.first(where: { $0.id == messageID }) else { return [] }
+        if messageIndexByID == nil {
+            messageIndexByID = Dictionary(d.messages.enumerated().map { ($1.id, $0) },
+                                          uniquingKeysWith: { first, _ in first })
+        }
+        guard let mi = messageIndexByID?[messageID] else { return [] }
+        let m = d.messages[mi]
         guard let parent = m.parentUuid ?? m.logicalParentUuid,
               let siblings = g.childrenOf[parent], siblings.count > 1 else { return [] }
-        let renderedIDs = Set(blocks.flatMap { $0.turns.map(\.id) })
+        if renderedTurnIDs == nil {
+            renderedTurnIDs = Set(blocks.flatMap { $0.turns.map(\.id) })
+        }
+        let renderedIDs = renderedTurnIDs ?? []
         return siblings.enumerated().map { ord, idx in
             let msg = d.messages[idx]
             let preview = MessageContent.oneLine(MessageContent.stripNoise(msg.bodyText), max: 60)

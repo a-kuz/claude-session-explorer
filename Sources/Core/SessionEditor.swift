@@ -52,27 +52,9 @@ enum SessionEditor {
     /// tool_result) keep their place untouched.
     static func setUserText(filePath: String, uuid: String, newText: String) throws {
         let url = URL(fileURLWithPath: filePath)
-        guard let content = try? String(contentsOf: url, encoding: .utf8) else {
-            throw EditorError.fileUnreadable
-        }
-        // Keep empty subsequences so join() reproduces the original layout,
-        // including the trailing newline.
-        var lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-
-        var lineIndex: Int?
-        var record: [String: Any]?
-        for i in lines.indices {
-            // Cheap prefilter: the child record contains this uuid as parentUuid
-            // too, so verify the parsed record's own uuid.
-            guard lines[i].contains(uuid),
-                  let data = lines[i].data(using: .utf8),
-                  let rec = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  (rec["uuid"] as? String) == uuid else { continue }
-            lineIndex = i
-            record = rec
-            break
-        }
-        guard let i = lineIndex, var rec = record else { throw EditorError.recordNotFound }
+        guard let content = JSONLBytes.read(filePath) else { throw EditorError.fileUnreadable }
+        guard let hit = locate(uuid: uuid, in: content) else { throw EditorError.recordNotFound }
+        var rec = hit.record
         guard (rec["type"] as? String) == "user",
               var msg = rec["message"] as? [String: Any] else { throw EditorError.notEditable }
 
@@ -99,26 +81,37 @@ enum SessionEditor {
         rec["message"] = msg
 
         guard JSONSerialization.isValidJSONObject(rec),
-              let newData = try? JSONSerialization.data(withJSONObject: rec,
+              let newLine = try? JSONSerialization.data(withJSONObject: rec,
                                                         options: [.withoutEscapingSlashes]),
-              let newLine = String(data: newData, encoding: .utf8),
-              !newLine.contains("\n") else {
+              !newLine.contains(0x0A) else {
             throw EditorError.encodingFailed
         }
-        lines[i] = newLine
-        try Data(lines.joined(separator: "\n").utf8).write(to: url, options: .atomic)
+        // Everything outside the record's line is copied through as raw bytes.
+        var out = Data(capacity: content.count - hit.line.count + newLine.count)
+        out.append(content[content.startIndex..<(content.startIndex + hit.line.lowerBound)])
+        out.append(newLine)
+        out.append(content[(content.startIndex + hit.line.upperBound)...])
+        try out.write(to: url, options: .atomic)
     }
 
     /// Find the record whose own `uuid` matches (not a parentUuid reference).
     private static func findRecord(filePath: String, uuid: String) -> [String: Any]? {
-        guard let content = try? String(contentsOfFile: filePath, encoding: .utf8) else { return nil }
-        var found: [String: Any]?
-        content.enumerateLines { line, stop in
-            guard line.contains(uuid),
-                  let data = line.data(using: .utf8),
-                  let rec = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+        guard let content = JSONLBytes.read(filePath) else { return nil }
+        return locate(uuid: uuid, in: content)?.record
+    }
+
+    /// The first line whose parsed record has `uuid` as its own uuid, with the
+    /// line's byte range in `content` (newline excluded). Only lines that
+    /// contain the uuid bytes are parsed — a child record carries the same
+    /// value as parentUuid, hence the check on the parsed record.
+    private static func locate(uuid: String, in content: Data) -> (record: [String: Any], line: Range<Int>)? {
+        let needle = Array(uuid.utf8)
+        var found: (record: [String: Any], line: Range<Int>)?
+        JSONLBytes.forEachLine(content) { line, offset, stop in
+            guard JSONLBytes.contains(line, needle),
+                  let rec = JSONLBytes.parse(line),
                   (rec["uuid"] as? String) == uuid else { return }
-            found = rec
+            found = (rec, offset..<(offset + line.count))
             stop = true
         }
         return found

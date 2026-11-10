@@ -94,9 +94,8 @@ enum Loader {
         return parts.last ?? path
     }
 
-    private static func parseLine(_ line: String) -> [String: Any]? {
-        guard !line.isEmpty, let data = line.data(using: .utf8) else { return nil }
-        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    private static func parseLine(_ line: UnsafeRawBufferPointer) -> [String: Any]? {
+        JSONLBytes.parse(line)
     }
 
     /// The `attachment` payload of a human mid-turn prompt, or nil. A prompt
@@ -270,15 +269,14 @@ enum Loader {
     /// Cold parse that also returns every user prompt in the file, for the
     /// prompt index (which the cold path replaces wholesale).
     static func parseSessionMetaWithPrompts(_ filePath: String) -> (meta: SessionMeta, prompts: [IndexedPrompt])? {
-        guard let content = try? String(contentsOfFile: filePath, encoding: .utf8) else { return nil }
+        guard let content = JSONLBytes.read(filePath) else { return nil }
         let attrs = try? FileManager.default.attributesOfItem(atPath: filePath)
         let fileMtime = (attrs?[.modificationDate] as? Date) ?? Date()
-        let byteSize = (attrs?[.size] as? Int) ?? content.utf8.count
+        let byteSize = (attrs?[.size] as? Int) ?? content.count
         let id = (filePath as NSString).lastPathComponent.replacingOccurrences(of: ".jsonl", with: "")
 
         var acc = MetaAccumulator(id: id)
-        content.enumerateLines { rawLine, _ in
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
+        JSONLBytes.forEachLine(content) { line, _, _ in
             guard let rec = parseLine(line) else { return }
             acc.consume(rec)
         }
@@ -303,11 +301,9 @@ enum Loader {
         }
         try? handle.seek(toOffset: fromOffset)
         let data = (try? handle.readToEnd()) ?? Data()
-        guard let text = String(data: data, encoding: .utf8) else { return nil }
 
         var acc = MetaAccumulator(seed: prev)
-        text.enumerateLines { rawLine, _ in
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
+        JSONLBytes.forEachLine(data) { line, _, _ in
             guard let rec = parseLine(line) else { return }
             acc.consume(rec)
         }
@@ -378,18 +374,22 @@ enum Loader {
         return results.compactMap { $0 }.sorted { $0.mtime > $1.mtime }
     }
 
-    /// Parse a slice of jsonl text (already-read lines) into dialog messages.
+    /// Parse a chunk of jsonl bytes into dialog messages.
     /// `indexBase` seeds the positional fallback id for records lacking a uuid.
-    private static func parseDialogLines<S: Sequence>(_ lines: S, indexBase: Int = 0) -> [DialogMessage]
-        where S.Element == Substring {
+    /// `complete` is false when the enclosing Task was cancelled mid-walk: the
+    /// messages are then a prefix of the chunk and must not be kept.
+    private static func parseDialogLines(_ chunk: UnsafeRawBufferPointer, indexBase: Int = 0)
+        -> (messages: [DialogMessage], complete: Bool) {
         var messages: [DialogMessage] = []
         var index = indexBase
         var resultsByID: [String: String] = [:]   // tool_use_id → result text
-        for raw in lines {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            guard let rec = parseLine(line) else { continue }
+        var complete = true
+        JSONLBytes.forEachLine(chunk) { line, _, stop in
+            // Checked per line: a single line can be megabytes of base64.
+            if Task.isCancelled { complete = false; stop = true; return }
+            guard let rec = parseLine(line) else { return }
             let type = rec["type"] as? String
-            if (rec["isSidechain"] as? Bool) == true { continue }
+            if (rec["isSidechain"] as? Bool) == true { return }
 
             let c: Any?
             let roleType: String
@@ -405,12 +405,12 @@ enum Loader {
                 roleType = "user"
                 if let ts = att["timestamp"] as? String { timestampString = ts }
             } else {
-                continue
+                return
             }
             let text = MessageContent.contentToText(c).trimmingCharacters(in: .whitespacesAndNewlines)
             let ex = MessageContent.extractContent(c)
             for (k, v) in ex.resultsByID { resultsByID[k] = v }
-            if text.isEmpty && ex.toolUses.isEmpty && ex.toolResults.isEmpty && ex.imageCount == 0 && ex.pieces.isEmpty { continue }
+            if text.isEmpty && ex.toolUses.isEmpty && ex.toolResults.isEmpty && ex.imageCount == 0 && ex.pieces.isEmpty { return }
 
             let isCompactSummary = type == "user" && (rec["isCompactSummary"] as? Bool) == true
             let isToolOrMeta = type == "user" &&
@@ -452,7 +452,7 @@ enum Loader {
                 return piece
             }
         }
-        return messages
+        return (messages, complete)
     }
 
     /// jsonl is append-only, so a growing session is read incrementally: only
@@ -469,9 +469,16 @@ enum Loader {
         if end == fromOffset { return ([], end, false, "") } // nothing new
         try? handle.seek(toOffset: fromOffset)
         let data = (try? handle.readToEnd()) ?? Data()
-        guard let text = String(data: data, encoding: .utf8) else { return ([], end, false, "") }
-        let msgs = parseDialogLines(text.split(separator: "\n", omittingEmptySubsequences: true))
-        return (msgs, end, false, text)
+        // A tail offset can land inside a multi-byte character; the damaged
+        // bytes are repaired so the rest of the chunk still parses. Messages are
+        // parsed from the bytes of `text` itself, so `loadImages(in: text)`
+        // walks exactly the same lines.
+        var text = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
+        let parsed = text.withUTF8 { parseDialogLines(UnsafeRawBufferPointer($0)) }
+        // Cancelled mid-parse: report "nothing read" at the unchanged offset, so
+        // a caller that applies the result skips no records.
+        guard parsed.complete else { return ([], fromOffset, false, "") }
+        return (parsed.messages, end, false, text)
     }
 
     /// Lazily load all inline images from a session, in the SAME order that
@@ -483,14 +490,25 @@ enum Loader {
     /// the base64 twin stays in the jsonl. So a missing ref `<k>.png` falls back
     /// to the k-th base64 image of the session; only if that fails too do we emit
     /// a placeholder NSImage (indices must stay aligned).
+    ///
+    /// When the enclosing Task is cancelled the walk stops and the images
+    /// collected so far are returned; the caller is expected to drop them.
     static func loadImages(_ filePath: String) -> [NSImage] {
-        guard let content = try? String(contentsOfFile: filePath, encoding: .utf8) else { return [] }
-        return loadImages(in: content)
+        guard let content = JSONLBytes.read(filePath) else { return [] }
+        return content.withUnsafeBytes { loadImages(inBytes: $0) }
     }
 
     /// Same walk over an already-read chunk of jsonl (e.g. a file tail); the
     /// indices line up with the turns built from that same chunk.
     static func loadImages(in content: String) -> [NSImage] {
+        var content = content
+        return content.withUTF8 { loadImages(inBytes: UnsafeRawBufferPointer($0)) }
+    }
+
+    private static let imageBlockNeedle = Array("\"image\"".utf8)
+    private static let imageRefNeedle = Array("Image: source:".utf8)
+
+    private static func loadImages(inBytes chunk: UnsafeRawBufferPointer) -> [NSImage] {
         var images: [NSImage] = []
         var base64Seen: [NSImage] = []   // standalone base64 images, in file order
 
@@ -502,10 +520,14 @@ enum Loader {
             return NSImage()
         }
 
-        content.enumerateLines { line, _ in
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.contains("\"image\"") || trimmed.contains("Image: source:"),
-                  let rec = parseLine(trimmed) else { return }
+        JSONLBytes.forEachLine(chunk) { line, _, stop in
+            if Task.isCancelled { stop = true; return }
+            // Most lines that mention "image" carry it only inside a tool_result
+            // (megabytes of nested base64), which yields no image here: the
+            // structural probe rules those out without building the JSON tree.
+            guard JSONLBytes.contains(line, imageBlockNeedle) || JSONLBytes.contains(line, imageRefNeedle),
+                  ImageProbe.mayYieldImages(line),
+                  let rec = parseLine(line) else { return }
             let type = rec["type"] as? String
             var content: [Any]?
             if type == "user" || type == "assistant" {
@@ -549,13 +571,19 @@ enum Loader {
     }
 
     /// Fully parse a session file into an ordered list of dialog messages.
+    /// When the enclosing Task is cancelled the parse stops early and the
+    /// returned dialog is a prefix; the caller is expected to drop it.
     static func loadDialog(_ filePath: String) -> SessionDialog {
+        loadDialogChecked(filePath).dialog
+    }
+
+    private static func loadDialogChecked(_ filePath: String) -> (dialog: SessionDialog, complete: Bool) {
         let id = (filePath as NSString).lastPathComponent.replacingOccurrences(of: ".jsonl", with: "")
-        guard let content = try? String(contentsOfFile: filePath, encoding: .utf8) else {
-            return SessionDialog(id: id, messages: [])
+        guard let content = JSONLBytes.read(filePath) else {
+            return (SessionDialog(id: id, messages: []), true)
         }
-        let messages = parseDialogLines(content.split(separator: "\n", omittingEmptySubsequences: true))
-        return SessionDialog(id: id, messages: messages)
+        let parsed = content.withUnsafeBytes { parseDialogLines($0) }
+        return (SessionDialog(id: id, messages: parsed.messages), parsed.complete)
     }
 
     /// Derive list metadata from an already-parsed message array (no file read).
@@ -602,12 +630,12 @@ enum Loader {
     /// for meta but not part of the dialog message stream.
     static func readHeader(_ filePath: String, limitBytes: Int = 1_000_000)
         -> (custom: String?, ai: String?, cwd: String?, model: String?) {
-        guard let content = try? String(contentsOfFile: filePath, encoding: .utf8) else {
+        guard let content = JSONLBytes.read(filePath) else {
             return (nil, nil, nil, nil)
         }
         var custom: String?, ai: String?, cwd: String?, model: String?
-        content.enumerateLines { line, stop in
-            guard let rec = parseLine(line.trimmingCharacters(in: .whitespaces)) else { return }
+        JSONLBytes.forEachLine(content) { line, _, _ in
+            guard let rec = parseLine(line) else { return }
             switch rec["type"] as? String {
             case "custom-title": custom = rec["customTitle"] as? String
             case "ai-title": ai = rec["aiTitle"] as? String
@@ -633,7 +661,9 @@ enum Loader {
             touchLRU(meta.id); cacheLock.unlock(); return hit
         }
         cacheLock.unlock()
-        let d = loadDialog(meta.filePath)
+        let (d, complete) = loadDialogChecked(meta.filePath)
+        // A parse cut short by cancellation is a prefix: never cached.
+        guard complete else { return d }
         cacheLock.lock()
         dialogCache[meta.id] = d
         touchLRU(meta.id)
@@ -658,5 +688,246 @@ enum Loader {
         dialogCache.removeValue(forKey: id)
         dialogLRU.removeAll { $0 == id }
         cacheLock.unlock()
+    }
+}
+
+/// Byte-level access to jsonl. Lines are cut on 0x0A only — the one byte that
+/// never occurs inside a JSON record or inside a UTF-8 multi-byte sequence — so
+/// a record holding a raw U+2028/U+2029/U+0085 stays one line.
+enum JSONLBytes {
+    /// The whole file, read into memory. Not memory-mapped: the CLI truncates a
+    /// live session file in place when it tombstones a failed streaming attempt,
+    /// and touching a mapped page past the new end is a SIGBUS.
+    static func read(_ filePath: String) -> Data? {
+        try? Data(contentsOf: URL(fileURLWithPath: filePath))
+    }
+
+    /// Calls `body` for every non-empty line with its bytes (no copy, valid only
+    /// during the call) and its offset in `chunk`. A last line without a
+    /// trailing newline is delivered too. Each call runs in its own autorelease
+    /// pool, so the JSON trees of earlier lines don't pile up.
+    static func forEachLine(_ chunk: UnsafeRawBufferPointer,
+                            _ body: (_ line: UnsafeRawBufferPointer, _ offset: Int, _ stop: inout Bool) -> Void) {
+        guard let base = chunk.baseAddress else { return }
+        let n = chunk.count
+        var start = 0
+        var stop = false
+        while start < n, !stop {
+            let end = memchr(base + start, 0x0A, n - start).map { UnsafeRawPointer($0) - base } ?? n
+            if end > start {
+                autoreleasepool {
+                    body(UnsafeRawBufferPointer(start: base + start, count: end - start), start, &stop)
+                }
+            }
+            start = end + 1
+        }
+    }
+
+    static func forEachLine(_ data: Data,
+                            _ body: (_ line: UnsafeRawBufferPointer, _ offset: Int, _ stop: inout Bool) -> Void) {
+        data.withUnsafeBytes { forEachLine($0, body) }
+    }
+
+    /// The line without surrounding spaces, tabs and CRs.
+    static func trim(_ line: UnsafeRawBufferPointer) -> UnsafeRawBufferPointer {
+        func blank(_ b: UInt8) -> Bool { b == 0x20 || b == 0x09 || b == 0x0D }
+        var lo = 0, hi = line.count
+        while lo < hi, blank(line[lo]) { lo += 1 }
+        while hi > lo, blank(line[hi - 1]) { hi -= 1 }
+        return UnsafeRawBufferPointer(rebasing: line[lo..<hi])
+    }
+
+    /// One jsonl line → a JSON object, or nil for blank / malformed / non-object.
+    static func parse(_ line: UnsafeRawBufferPointer) -> [String: Any]? {
+        let t = trim(line)
+        guard t.count > 0, let base = t.baseAddress else { return nil }
+        let data = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: base), count: t.count, deallocator: .none)
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    static func contains(_ haystack: UnsafeRawBufferPointer, _ needle: [UInt8]) -> Bool {
+        guard let base = haystack.baseAddress, !needle.isEmpty else { return false }
+        return memmem(base, haystack.count, needle, needle.count) != nil
+    }
+}
+
+/// Structural check of one jsonl line for `Loader.loadImages`, done on the raw
+/// bytes: does `message.content` or `attachment.prompt` hold a top-level block
+/// that becomes an image (an `image` block, or a string / `text` block with an
+/// "[Image: source: …]" ref)? It only ever answers "no" for a line it has walked
+/// and understood; anything it can't read with certainty (malformed JSON,
+/// escaped or duplicate keys) answers "maybe", and the line goes through the
+/// full JSON parse.
+private enum ImageProbe {
+    private static let quote: UInt8 = 0x22, backslash: UInt8 = 0x5C
+    private static let lbrace: UInt8 = 0x7B, rbrace: UInt8 = 0x7D
+    private static let lbracket: UInt8 = 0x5B, rbracket: UInt8 = 0x5D
+    private static let comma: UInt8 = 0x2C, colon: UInt8 = 0x3A
+
+    private static let kMessage = Array("message".utf8), kContent = Array("content".utf8)
+    private static let kAttachment = Array("attachment".utf8), kPrompt = Array("prompt".utf8)
+    private static let kType = Array("type".utf8)
+    private static let vImage = Array("image".utf8), vText = Array("text".utf8)
+    private static let refNeedle = Array("Image: source:".utf8)
+
+    private struct Scanner {
+        let p: UnsafePointer<UInt8>
+        let n: Int
+
+        func skipWS(_ i: Int) -> Int {
+            var j = i
+            while j < n, p[j] == 0x20 || p[j] == 0x09 || p[j] == 0x0A || p[j] == 0x0D { j += 1 }
+            return j
+        }
+
+        /// `i` is at an opening quote; returns the index just past the closing one.
+        func stringEnd(_ i: Int) -> Int? {
+            var j = i + 1
+            while j < n {
+                guard let q = memchr(p + j, Int32(quote), n - j) else { return nil }
+                let qi = UnsafePointer<UInt8>(q.assumingMemoryBound(to: UInt8.self)) - p
+                var k = qi - 1, slashes = 0
+                while k > i, p[k] == backslash { slashes += 1; k -= 1 }
+                if slashes % 2 == 0 { return qi + 1 }
+                j = qi + 1
+            }
+            return nil
+        }
+
+        /// `i` is at the first byte of a value; returns the index just past it.
+        func valueEnd(_ i: Int) -> Int? {
+            guard i < n else { return nil }
+            switch p[i] {
+            case quote:
+                return stringEnd(i)
+            case lbrace, lbracket:
+                var depth = 0, j = i
+                while j < n {
+                    let b = p[j]
+                    if b == quote {
+                        guard let e = stringEnd(j) else { return nil }
+                        j = e
+                        continue
+                    }
+                    if b == lbrace || b == lbracket {
+                        depth += 1
+                    } else if b == rbrace || b == rbracket {
+                        depth -= 1
+                        if depth == 0 { return j + 1 }
+                    }
+                    j += 1
+                }
+                return nil
+            default:
+                var j = i
+                while j < n, p[j] != comma, p[j] != rbrace, p[j] != rbracket,
+                      p[j] != 0x20, p[j] != 0x09, p[j] != 0x0A, p[j] != 0x0D { j += 1 }
+                return j > i ? j : nil
+            }
+        }
+
+        /// Walks the members of the object at `i`. `body` gets the key bytes
+        /// (between the quotes) and the value range. False when the object
+        /// can't be walked to its closing brace.
+        func forEachMember(_ i: Int, _ body: (_ key: Range<Int>, _ value: Range<Int>) -> Void) -> Bool {
+            var j = skipWS(i + 1)
+            if j < n, p[j] == rbrace { return true }
+            while true {
+                guard j < n, p[j] == quote, let keyEnd = stringEnd(j) else { return false }
+                var v = skipWS(keyEnd)
+                guard v < n, p[v] == colon else { return false }
+                v = skipWS(v + 1)
+                guard let valEnd = valueEnd(v) else { return false }
+                body((j + 1)..<(keyEnd - 1), v..<valEnd)
+                j = skipWS(valEnd)
+                guard j < n else { return false }
+                if p[j] == comma { j = skipWS(j + 1); continue }
+                return p[j] == rbrace
+            }
+        }
+
+        /// Walks the elements of the array at `i`; false when it can't be
+        /// walked to its closing bracket.
+        func forEachElement(_ i: Int, _ body: (_ value: Range<Int>) -> Void) -> Bool {
+            var j = skipWS(i + 1)
+            if j < n, p[j] == rbracket { return true }
+            while true {
+                guard let valEnd = valueEnd(j) else { return false }
+                body(j..<valEnd)
+                j = skipWS(valEnd)
+                guard j < n else { return false }
+                if p[j] == comma { j = skipWS(j + 1); continue }
+                return p[j] == rbracket
+            }
+        }
+
+        func equals(_ r: Range<Int>, _ bytes: [UInt8]) -> Bool {
+            r.count == bytes.count && memcmp(p + r.lowerBound, bytes, bytes.count) == 0
+        }
+
+        func contains(_ r: Range<Int>, _ needle: [UInt8]) -> Bool {
+            memmem(p + r.lowerBound, r.count, needle, needle.count) != nil
+        }
+
+        func hasBackslash(_ r: Range<Int>) -> Bool {
+            memchr(p + r.lowerBound, Int32(backslash), r.count) != nil
+        }
+
+        /// Values of the members named `a` and `b` in the object at `i`. Nil
+        /// when the lookup is not certain: the object can't be walked, a key is
+        /// escaped (it could spell either name), or a name occurs twice.
+        func lookup(_ i: Int, _ a: [UInt8], _ b: [UInt8]) -> (a: Range<Int>?, b: Range<Int>?)? {
+            var ra: Range<Int>?, rb: Range<Int>?
+            var certain = true
+            let walked = forEachMember(i) { key, value in
+                if hasBackslash(key) { certain = false; return }
+                if equals(key, a) {
+                    if ra != nil { certain = false }
+                    ra = value
+                } else if equals(key, b) {
+                    if rb != nil { certain = false }
+                    rb = value
+                }
+            }
+            return walked && certain ? (ra, rb) : nil
+        }
+
+        /// Can the content array at `i` contribute an image?
+        func arrayMayYield(_ i: Int) -> Bool {
+            var may = false
+            let walked = forEachElement(i) { el in
+                if may { return }
+                switch p[el.lowerBound] {
+                case quote:
+                    if contains(el, refNeedle) { may = true }
+                case lbrace:
+                    guard let found = lookup(el.lowerBound, kType, kType) else { may = true; return }
+                    guard let type = found.a, p[type.lowerBound] == quote else { return }
+                    let inner = (type.lowerBound + 1)..<(type.upperBound - 1)
+                    if hasBackslash(inner) || equals(inner, vImage) { may = true; return }
+                    if equals(inner, vText), contains(el, refNeedle) { may = true }
+                default:
+                    break
+                }
+            }
+            return may || !walked
+        }
+
+        /// Can `container.key` (when it is an array inside an object) contribute?
+        func memberMayYield(_ container: Range<Int>?, _ key: [UInt8]) -> Bool {
+            guard let c = container, p[c.lowerBound] == lbrace else { return false }
+            guard let found = lookup(c.lowerBound, key, key) else { return true }
+            guard let arr = found.a, p[arr.lowerBound] == lbracket else { return false }
+            return arrayMayYield(arr.lowerBound)
+        }
+    }
+
+    static func mayYieldImages(_ line: UnsafeRawBufferPointer) -> Bool {
+        guard let base = line.baseAddress else { return false }
+        let s = Scanner(p: base.assumingMemoryBound(to: UInt8.self), n: line.count)
+        let start = s.skipWS(0)
+        guard start < s.n, s.p[start] == lbrace else { return true }
+        guard let top = s.lookup(start, kMessage, kAttachment) else { return true }
+        return s.memberMayYield(top.a, kContent) || s.memberMayYield(top.b, kPrompt)
     }
 }
