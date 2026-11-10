@@ -7,7 +7,7 @@ description: Share the current Claude Code session (or any sessions) by link —
 
 Uploads Claude Code session jsonl files to the session-explorer share server
 (Cloudflare Workers + KV) and prints a public link. Each run creates a new
-independent snapshot link; links expire in 30 days. The viewer renders the
+independent snapshot link; a link stays up until its owner deletes it. The viewer renders the
 full transcript — prompts, replies, and collapsed tool calls — and works on
 mobile.
 
