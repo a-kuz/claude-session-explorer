@@ -30,6 +30,11 @@ export interface Env {
   ASSETS: Fetcher;
 }
 
+/** The bindings plus the request's `waitUntil`. */
+interface Scope extends Env {
+  waitUntil(promise: Promise<unknown>): void;
+}
+
 const MAX_SESSIONS = 100;
 const MAX_CHUNK_BYTES = 24 * 1024 * 1024; // KV value limit is 25 MB
 const MAX_CHUNKS = 64; // per session
@@ -84,12 +89,12 @@ function cleanStr(v: unknown, max: number): string {
   return typeof v === "string" ? v.slice(0, max) : "";
 }
 
-async function loadManifest(env: Env, id: string): Promise<Manifest | null> {
+async function loadManifest(env: Scope, id: string): Promise<Manifest | null> {
   if (!/^[1-9A-HJ-NP-Za-km-z]{10,40}$/.test(id)) return null;
   return await env.SHARES.get<Manifest>(`share:${id}`, "json");
 }
 
-async function requireOwner(env: Env, id: string, req: Request): Promise<Manifest | Response> {
+async function requireOwner(env: Scope, id: string, req: Request): Promise<Manifest | Response> {
   const manifest = await loadManifest(env, id);
   if (!manifest) return err(404, "share not found");
   const token = req.headers.get("X-Owner-Token") ?? "";
@@ -119,52 +124,46 @@ function textKey(id: string, n: number, variant: string): string {
 type ByteStream = ReadableStream<Uint8Array>;
 
 /** `count` streams read one after another, each opened when the previous one
- *  ends; `separator` goes between them. Null when the first does not exist. */
+ *  ends; `separator` goes between them. Null when the first does not exist.
+ *  The bytes move by pipeTo into an identity stream, inside the runtime: a
+ *  reader loop in script spends CPU time on every block. */
 async function concatStreams(
-  count: number, open: (i: number) => Promise<ByteStream | null>, separator?: Uint8Array,
+  env: Scope, count: number, open: (i: number) => Promise<ByteStream | null>, separator?: Uint8Array,
 ): Promise<ByteStream | null> {
   const first = await open(0);
   if (!first) return null;
   if (count === 1) return first;
-  let i = 0;
-  let reader = first.getReader();
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (!done) {
-          controller.enqueue(value);
-          return;
+  const { readable, writable } = new IdentityTransformStream();
+  env.waitUntil((async () => {
+    try {
+      let stream: ByteStream = first;
+      for (let i = 0; i < count; i++) {
+        if (i > 0) {
+          const next = await open(i);
+          if (!next) throw new Error(`stream ${i} of ${count} missing`);
+          stream = next;
+          if (separator) {
+            const writer = writable.getWriter();
+            await writer.write(separator);
+            writer.releaseLock();
+          }
         }
-        i++;
-        if (i >= count) {
-          controller.close();
-          return;
-        }
-        const next = await open(i);
-        if (!next) {
-          controller.error(new Error(`stream ${i} of ${count} missing`));
-          return;
-        }
-        reader = next.getReader();
-        if (separator) {
-          controller.enqueue(separator);
-          return;
-        }
+        await stream.pipeTo(writable, { preventClose: true });
       }
-    },
-    cancel(reason) {
-      return reader.cancel(reason);
-    },
-  });
+      await writable.close();
+    } catch (e) {
+      await writable.abort(e).catch(() => {});
+    }
+  })());
+  return readable as ByteStream;
 }
 
 /** The gzipped body of session n: its chunks read one after another. */
 function partGzStream(
-  env: Env, id: string, manifest: Manifest, n: number,
+  env: Scope, id: string, manifest: Manifest, n: number,
 ): Promise<ByteStream | null> {
   return concatStreams(
-    manifest.sessions[n]?.chunks ?? 1,
+    env, manifest.sessions[n]?.chunks ?? 1,
     async (c) => (await env.SHARES.get(chunkKey(id, n, c), "stream")) as ByteStream | null,
   );
 }
@@ -172,13 +171,13 @@ function partGzStream(
 /** The stored transcripts of `indexes` in one variant, joined the way the
  *  computed ones are. Null unless every one of the sessions has that variant. */
 function storedTranscripts(
-  env: Env, id: string, manifest: Manifest, indexes: number[], variant: string,
+  env: Scope, id: string, manifest: Manifest, indexes: number[], variant: string,
 ): Promise<ByteStream | null> {
   if (!indexes.every((n) => manifest.sessions[n].texts?.includes(variant))) {
     return Promise.resolve(null);
   }
   return concatStreams(
-    indexes.length,
+    env, indexes.length,
     async (i) => {
       const gz = await env.SHARES.get(textKey(id, indexes[i], variant), "stream");
       return gz ? (gz.pipeThrough(new DecompressionStream("gzip")) as ByteStream) : null;
@@ -188,7 +187,7 @@ function storedTranscripts(
 }
 
 async function partTextStream(
-  env: Env, id: string, manifest: Manifest, n: number,
+  env: Scope, id: string, manifest: Manifest, n: number,
 ): Promise<ReadableStream<Uint8Array> | null> {
   const gz = await partGzStream(env, id, manifest, n);
   if (!gz) return null;
@@ -199,7 +198,7 @@ async function partTextStream(
  *  decompression stream (the jsonl is never held in memory whole). `onLine`
  *  returning true stops the read. False when the part does not exist. */
 async function eachLine(
-  env: Env, id: string, manifest: Manifest, n: number, onLine: (line: string) => boolean | void,
+  env: Scope, id: string, manifest: Manifest, n: number, onLine: (line: string) => boolean | void,
 ): Promise<boolean> {
   const stream = await partTextStream(env, id, manifest, n);
   if (!stream) return false;
@@ -230,7 +229,7 @@ async function eachLine(
 
 /** Transcript of one stored session; images become links to `imageBase/<k>`. */
 async function sessionTranscript(
-  env: Env, id: string, manifest: Manifest, n: number, tools: ToolDetail, thinking: boolean,
+  env: Scope, id: string, manifest: Manifest, n: number, tools: ToolDetail, thinking: boolean,
   imageBase: string,
 ): Promise<string | null> {
   let imageIndex = 0;
@@ -249,7 +248,7 @@ async function sessionTranscript(
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
 async function sessionImage(
-  env: Env, id: string, manifest: Manifest, n: number, k: number,
+  env: Scope, id: string, manifest: Manifest, n: number, k: number,
 ): Promise<Response> {
   let imageIndex = 0;
   let found: { mediaType: string; data: string } | null = null;
@@ -284,7 +283,7 @@ function plainText(body: string | ByteStream): Response {
 }
 
 async function handleRead(
-  req: Request, env: Env, id: string, ref: string | undefined, kind: string, arg?: string,
+  req: Request, env: Scope, id: string, ref: string | undefined, kind: string, arg?: string,
 ): Promise<Response> {
   const manifest = await loadManifest(env, id);
   if (!manifest) return err(404, "share not found");
@@ -338,7 +337,7 @@ async function handleRead(
 
 /** SHA-256 (as sent by the uploader) of every stored body chunk of a share,
  *  keyed "<session>:<chunk>". */
-async function uploadedChunks(env: Env, id: string): Promise<Record<string, string>> {
+async function uploadedChunks(env: Scope, id: string): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   const prefix = `share:${id}:`;
   let cursor: string | undefined;
@@ -353,7 +352,7 @@ async function uploadedChunks(env: Env, id: string): Promise<Record<string, stri
   return out;
 }
 
-async function handleApi(req: Request, env: Env, path: string): Promise<Response> {
+async function handleApi(req: Request, env: Scope, path: string): Promise<Response> {
   // POST /api/share — create a share: manifest with session metas, complete:false.
   // With {resume: <id>} and that share's owner token, an unfinished share of
   // the same sessions is continued instead: the response repeats its id and
@@ -549,7 +548,7 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
 
 /** The viewer page of a share with a link to its plain-text transcript in
  *  the markup itself, so it is there for readers that do not run the script. */
-async function sharePage(env: Env, url: URL, id: string): Promise<Response> {
+async function sharePage(env: Scope, url: URL, id: string): Promise<Response> {
   const page = await env.ASSETS.fetch(new Request(new URL("/", url)));
   const href = `/api/share/${id}/text`;
   return new HTMLRewriter()
@@ -567,7 +566,12 @@ async function sharePage(env: Env, url: URL, id: string): Promise<Response> {
 }
 
 export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+  async fetch(req: Request, bindings: Env, ctx: ExecutionContext): Promise<Response> {
+    const env: Scope = {
+      SHARES: bindings.SHARES,
+      ASSETS: bindings.ASSETS,
+      waitUntil: (promise) => ctx.waitUntil(promise),
+    };
     const url = new URL(req.url);
     if (url.pathname.startsWith("/api/")) {
       return handleApi(req, env, url.pathname);
