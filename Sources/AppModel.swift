@@ -207,7 +207,7 @@ final class AppModel: ObservableObject {
     @Published var focusTranscriptRequested = false
     /// True while the transcript (detail) holds keyboard focus — bare ↑/↓ then
     /// navigate replies instead of moving the session selection.
-    @Published var transcriptHasFocus = false
+    var transcriptHasFocus = false
     /// Compact "compact" mode (hotkey r): hide tool machinery and intermediate
     /// assistant prose, keeping only prompts + the reply just before each prompt.
     @Published var briefMode = false {
@@ -229,7 +229,7 @@ final class AppModel: ObservableObject {
     /// True when the open session has at least one branch point.
     var hasBranches: Bool { branchGraph?.hasBranches ?? false }
     /// True while the search field holds keyboard focus (bare keys suppressed).
-    @Published var searchFieldFocused = false
+    var searchFieldFocused = false
 
     /// Vertical "air" between replies in the conversation (8–40px), tunable.
     @Published var air: CGFloat = 18 { didSet { persistUIState() } }
@@ -313,13 +313,13 @@ final class AppModel: ObservableObject {
     /// When true, the next scroll lands instantly (no animated travel) — used on
     /// session switch so the new transcript appears already in place, not
     /// scrolling across. Reset by the view after it consumes the request.
-    @Published var scrollInstant = false
+    var scrollInstant = false
     /// True from the moment a programmatic jump (outline click, match/turn nav) is
     /// requested until the view finishes settling on it. While set, the scroll
     /// view's position feedback must NOT rewrite `turnIndex` — otherwise blocks
     /// flying past during the animated jump (or a still-settling previous jump on
     /// a rapid second click) overwrite the target and it lands on the wrong reply.
-    @Published var jumpInFlight = false
+    var jumpInFlight = false
 
     private func requestScroll(to id: String?, instant: Bool = false) {
         scrollInstant = instant
@@ -682,27 +682,54 @@ final class AppModel: ObservableObject {
         let path = meta.filePath
         let fromOffset = dialogOffset
         let base = dialogMessages
+        let brief = briefMode
+        let mode = branchMode
+        let choice = branchChoice
         Task.detached(priority: .utility) {
             guard let tail = Loader.loadDialogTail(path, fromOffset: fromOffset) else { return }
             // The merged list and its branch graph are O(session) — built here,
             // off the main thread, from the snapshot this reader started with.
             let all = tail.truncated || tail.messages.isEmpty ? base : base + tail.messages
             let graph = tail.truncated || tail.messages.isEmpty ? nil : BranchGraph.build(from: all)
+            // With an active-path filter the rendered order isn't the raw order,
+            // so the incremental splice doesn't apply and the whole transcript is
+            // rebuilt — here, not on the main thread.
+            var filtered: (turns: [DialogTurn], blocks: [DialogBlock])?
+            // File rotated/shrank: the full re-read and rebuild also happen here.
+            var reloaded: (dialog: SessionDialog, length: UInt64, graph: BranchGraph,
+                           turns: [DialogTurn], blocks: [DialogBlock])?
+            if tail.truncated {
+                let d = Loader.loadDialog(path)
+                let len = Loader.fileLength(path)
+                let g = BranchGraph.build(from: d.messages)
+                let t = DialogTurn.build(
+                    from: Self.renderSource(d.messages, graph: g, mode: mode, choice: [:]), brief: brief)
+                reloaded = (d, len, g, t, DialogBlock.build(from: t))
+            }
+            if let graph, graph.hasBranches, mode != .tree {
+                let source = Self.renderSource(all, graph: graph, mode: mode, choice: choice)
+                let t = DialogTurn.build(from: source, brief: brief)
+                filtered = (t, DialogBlock.build(from: t))
+            }
             await MainActor.run {
                 guard self.selectedID == meta.id else { return }
                 // Two refreshes dispatched before either landed read the SAME
                 // tail; the second one would append it twice. Only the reader
                 // that started at the current offset may apply.
                 guard self.dialogOffset == fromOffset else { return }
-                if tail.truncated {
-                    // File rotated/shrank — fall back to a full reload.
-                    let d = Loader.loadDialog(path)
-                    self.dialogMessages = d.messages
-                    self.dialogOffset = Loader.fileLength(path)
-                    self.dialog = d
-                    self.branchGraph = BranchGraph.build(from: d.messages)
+                if let r = reloaded {
+                    self.dialogMessages = r.dialog.messages
+                    self.dialogOffset = r.length
+                    self.dialog = r.dialog
+                    self.branchGraph = r.graph
                     self.branchChoice = [:]
-                    self.rebuildTurns()
+                    if self.briefMode == brief, self.branchMode == mode {
+                        self.turns = r.turns
+                        self.blocks = r.blocks
+                        self.recomputeMatches()
+                    } else {
+                        self.rebuildTurns()
+                    }
                     return
                 }
                 guard !tail.messages.isEmpty else {
@@ -715,7 +742,14 @@ final class AppModel: ObservableObject {
                 // re-derived above. Stable ids mean unchanged turns keep
                 // identity, so only the new/last turn(s) actually re-render.
                 if let graph { self.branchGraph = graph }
-                self.rebuildTurnsAppending()
+                if let filtered, self.briefMode == brief, self.branchMode == mode,
+                   self.branchChoice == choice {
+                    self.turns = filtered.turns
+                    self.blocks = filtered.blocks
+                    self.recomputeMatches(keepPosition: true)
+                } else {
+                    self.rebuildTurnsAppending()
+                }
             }
         }
     }
@@ -979,10 +1013,14 @@ final class AppModel: ObservableObject {
     /// (или сбросе в nil) — клик на пустое место мгновенно прерывает тяжёлый
     /// build/render гигантской сессии, а не ждёт его на main-thread.
     private var loadTask: Task<Void, Never>?
+    /// Image read for the open session; cancelled together with `loadTask`.
+    private var imagesTask: Task<Void, Never>?
 
     private func loadSelectedDialog() {
         loadTask?.cancel()
         loadTask = nil
+        imagesTask?.cancel()
+        imagesTask = nil
         guard let meta = selectedMeta else {
             dialog = nil; turns = []; blocks = []; dialogMessages = []
             dialogOffset = 0; dialogImages = []
@@ -994,13 +1032,15 @@ final class AppModel: ObservableObject {
         // поэтому UI не виснет и переключение сессий отзывчиво даже на полотнах.
         let path = meta.filePath
         let brief = briefMode
+        let mode = branchMode
         loadTask = Task.detached(priority: .userInitiated) {
             let d = Loader.loadDialogCached(meta)
             if Task.isCancelled { return }
             let len = Loader.fileLength(path)
             let mtime = Loader.fileMtime(path)
-            // build вне main
-            let source = Self.messagesForRenderStatic(d.messages, brief: brief)
+            // build вне main, включая граф веток и фильтр активного пути
+            let graph = BranchGraph.build(from: d.messages)
+            let source = Self.renderSource(d.messages, graph: graph, mode: mode, choice: [:])
             if Task.isCancelled { return }
             let builtTurns = DialogTurn.build(from: source, brief: brief)
             if Task.isCancelled { return }
@@ -1011,7 +1051,8 @@ final class AppModel: ObservableObject {
                 self.dialogMessages = d.messages
                 self.dialogOffset = len
                 self.openDialogMtime = mtime
-                self.applyDialog(d, turns: builtTurns, blocks: builtBlocks)
+                self.applyDialog(d, graph: graph, turns: builtTurns, blocks: builtBlocks,
+                                 builtBrief: brief, builtMode: mode)
             }
         }
     }
@@ -1021,9 +1062,10 @@ final class AppModel: ObservableObject {
         dialogImages = []
         let path = meta.filePath
         let id = meta.id
-        Task.detached(priority: .utility) {
+        imagesTask?.cancel()
+        imagesTask = Task.detached(priority: .utility) {
             let imgs = Loader.loadImages(path)
-            guard !imgs.isEmpty else { return }
+            guard !Task.isCancelled, !imgs.isEmpty else { return }
             await MainActor.run {
                 if self.selectedID == id {
                     self.dialogImages = imgs
@@ -1058,15 +1100,15 @@ final class AppModel: ObservableObject {
 
     /// Применяет УЖЕ построенные (off-main) turns/blocks открытой сессии —
     /// одно мгновенное присваивание на main-thread, без тяжёлого build.
-    private func applyDialog(_ d: SessionDialog, turns builtTurns: [DialogTurn], blocks builtBlocks: [DialogBlock]) {
+    private func applyDialog(_ d: SessionDialog, graph: BranchGraph,
+                             turns builtTurns: [DialogTurn], blocks builtBlocks: [DialogBlock],
+                             builtBrief: Bool, builtMode: BranchMode) {
         dialog = d
-        branchGraph = BranchGraph.build(from: d.messages)
+        branchGraph = graph
         branchChoice = [:]
-        // Ветвлёная сессия в .switcher/.activeOnly требует фильтра активного
-        // пути (инстансная логика с branchGraph) — там перестраиваем на main
-        // (данные уже в памяти, диск не трогаем). Линейные сессии (почти все,
-        // включая гигантские раны нейробота) берут готовый off-main build.
-        if let g = branchGraph, g.hasBranches, branchMode != .tree {
+        // Build сделан off-main под режимы на момент старта загрузки; если
+        // brief/branchMode успели смениться — перестраиваем на main под текущие.
+        if builtBrief != briefMode || builtMode != branchMode {
             rebuildTurns()
         } else {
             turns = builtTurns
@@ -1088,20 +1130,15 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Build вне main для линейной (не ветвлёной) загрузки — raw-порядок
-    /// сообщений. Ветвление обрабатывается на main в `applyDialog`.
-    nonisolated private static func messagesForRenderStatic(_ messages: [DialogMessage], brief: Bool) -> [DialogMessage] {
-        messages
-    }
 
     /// Re-derive turns + blocks from the current dialog (e.g. on briefMode /
     /// branchMode change, or a branch-point override).
-    private func rebuildTurns() {
+    private func rebuildTurns(keepMatchPosition: Bool = false) {
         guard let d = dialog else { turns = []; blocks = []; return }
         let source = messagesForRender(d.messages)
         turns = DialogTurn.build(from: source, brief: briefMode)
         blocks = DialogBlock.build(from: turns)
-        recomputeMatches()
+        recomputeMatches(keepPosition: keepMatchPosition)
     }
 
     /// Incremental rebuild after a pure tail append (append-only jsonl). A real
@@ -1115,12 +1152,12 @@ final class AppModel: ObservableObject {
     /// line up, and that isn't the live-append hot path anyway.
     private func rebuildTurnsAppending() {
         guard let d = dialog, branchMode == .tree || branchGraph?.hasBranches != true else {
-            rebuildTurns(); return
+            rebuildTurns(keepMatchPosition: true); return
         }
         let msgs = d.messages
         // Find the last real user prompt; rebuild from there. If none, full build.
         guard let lastPrompt = msgs.lastIndex(where: { DialogTurn.isRealUserPrompt($0) }) else {
-            rebuildTurns(); return
+            rebuildTurns(keepMatchPosition: true); return
         }
         // Images consumed by messages before the rebuild point seed the cursor so
         // per-turn image slicing stays aligned with the session-wide image array.
@@ -1139,23 +1176,30 @@ final class AppModel: ObservableObject {
             turns = DialogTurn.build(from: msgs, brief: briefMode)
         }
         blocks = DialogBlock.build(from: turns)
-        recomputeMatches()
+        recomputeMatches(keepPosition: true)
     }
 
     /// The message slice to render, per `branchMode`:
     /// - `.tree`: the raw file order (every branch shown; the view indents them).
     /// - otherwise: the active linear path, honoring any `.switcher` overrides.
     private func messagesForRender(_ messages: [DialogMessage]) -> [DialogMessage] {
-        guard let g = branchGraph, g.hasBranches, branchMode != .tree else { return messages }
-        let path = activeBranchPath(in: messages, graph: g)
+        Self.renderSource(messages, graph: branchGraph, mode: branchMode, choice: branchChoice)
+    }
+
+    /// `messagesForRender` over explicit inputs, callable off the main actor.
+    nonisolated private static func renderSource(_ messages: [DialogMessage], graph: BranchGraph?,
+                                                 mode: BranchMode, choice: [String: Int]) -> [DialogMessage] {
+        guard let g = graph, g.hasBranches, mode != .tree else { return messages }
+        let path = activeBranchPath(in: messages, graph: g, mode: mode, choice: choice)
         return path.map { messages[$0] }
     }
 
     /// Indices of the linear path to render: like `BranchGraph.activePath`, but at
     /// any branch point the user overrode in `.switcher` mode, take their child.
-    private func activeBranchPath(in messages: [DialogMessage], graph g: BranchGraph) -> [Int] {
+    nonisolated private static func activeBranchPath(in messages: [DialogMessage], graph g: BranchGraph,
+                                                     mode: BranchMode, choice: [String: Int]) -> [Int] {
         let auto = g.activePath(in: messages)
-        guard branchMode == .switcher, !branchChoice.isEmpty else { return auto }
+        guard mode == .switcher, !choice.isEmpty else { return auto }
         var path: [Int] = []
         var frontier = g.childrenOf[""] ?? []
         // Walk down, preferring an overridden child where one exists; otherwise
@@ -1164,7 +1208,7 @@ final class AppModel: ObservableObject {
         while !frontier.isEmpty {
             let chosen: Int
             if frontier.count > 1, let parentUUID = parentUUID(of: frontier, in: messages),
-               let pick = branchChoice[parentUUID], frontier.contains(pick) {
+               let pick = choice[parentUUID], frontier.contains(pick) {
                 chosen = pick
             } else if let auto = frontier.first(where: { autoSet.contains($0) }) {
                 chosen = auto
@@ -1178,7 +1222,7 @@ final class AppModel: ObservableObject {
     }
 
     /// All children in a frontier share one parent uuid; return it.
-    private func parentUUID(of frontier: [Int], in messages: [DialogMessage]) -> String? {
+    nonisolated private static func parentUUID(of frontier: [Int], in messages: [DialogMessage]) -> String? {
         guard let first = frontier.first else { return nil }
         return messages[first].parentUuid ?? messages[first].logicalParentUuid
     }
@@ -1228,9 +1272,17 @@ final class AppModel: ObservableObject {
     /// Turn ids that contain a search match (all tokens present).
     @Published private(set) var matchTurnIDs: [String] = []
 
-    private func recomputeMatches() {
+    /// `keepPosition` is for a live tail append: the reader stays on the match
+    /// they were on instead of being scrolled back to the first one.
+    private func recomputeMatches(keepPosition: Bool = false) {
         guard !searchTokens.isEmpty else {
-            matchTurnIDs = []; matchCount = 0; matchIndex = 0; scrollTarget = nil; return
+            // Assigned only on change: this runs on every tail append of a live
+            // session, and each @Published assignment re-renders every panel.
+            if !matchTurnIDs.isEmpty { matchTurnIDs = [] }
+            if matchCount != 0 { matchCount = 0 }
+            if matchIndex != 0 { matchIndex = 0 }
+            if scrollTarget != nil { scrollTarget = nil }
+            return
         }
         let tokens = searchTokens
         // A block matches if any of its turns contains all tokens; scroll targets
@@ -1242,8 +1294,13 @@ final class AppModel: ObservableObject {
             }
             return hit ? block.id : nil
         }
+        let current = matchTurnIDs.indices.contains(matchIndex) ? matchTurnIDs[matchIndex] : nil
         matchTurnIDs = ids
         matchCount = ids.count
+        if keepPosition {
+            if let current, let kept = ids.firstIndex(of: current) { matchIndex = kept; return }
+            if ids.isEmpty { matchIndex = 0; return }
+        }
         matchIndex = 0
         requestScroll(to: ids.first)
     }
