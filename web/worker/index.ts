@@ -439,11 +439,34 @@ async function handleApi(req: Request, env: Env, path: string): Promise<Response
   return err(405, "method not allowed");
 }
 
+/** The viewer page of a share with a link to its plain-text transcript in
+ *  the markup itself, so it is there for readers that do not run the script. */
+async function sharePage(env: Env, url: URL, id: string): Promise<Response> {
+  const page = await env.ASSETS.fetch(new Request(new URL("/", url)));
+  const href = `/api/share/${id}/text`;
+  return new HTMLRewriter()
+    .on("head", {
+      element(el) {
+        el.append(`<link rel="alternate" type="text/plain" href="${href}" title="Transcript" />`, { html: true });
+      },
+    })
+    .on("#toolbar-spacer", {
+      element(el) {
+        el.after(`<a id="transcript-link" href="${href}">Transcript</a>`, { html: true });
+      },
+    })
+    .transform(page);
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname.startsWith("/api/")) {
       return handleApi(req, env, url.pathname);
+    }
+    const shared = url.pathname.match(/^\/s\/([1-9A-HJ-NP-Za-km-z]{10,40})\/?$/);
+    if (shared && req.method === "GET") {
+      return sharePage(env, url, shared[1]);
     }
     return env.ASSETS.fetch(req);
   },

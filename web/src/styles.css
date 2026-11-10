@@ -78,6 +78,7 @@ body {
 }
 #toolbar-spacer { flex: 1; }
 #share-status { color: var(--muted); font-size: 12px; }
+#transcript-link { color: var(--accent); font-size: 13px; font-weight: 500; white-space: nowrap; }
 button {
   padding: 6px 14px; border: 1px solid var(--border); border-radius: 999px;
   background: var(--card); color: var(--text-soft); font-size: 13px; cursor: pointer;

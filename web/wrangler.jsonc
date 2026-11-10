@@ -11,7 +11,7 @@
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*", "/s/*"]
   },
   "kv_namespaces": [
     { "binding": "SHARES", "id": "ad1ed9f1e9b94aafb91a3347c75f25a1" }
