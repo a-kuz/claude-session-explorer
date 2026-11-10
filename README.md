@@ -21,6 +21,22 @@ working in right now.
 
 ![Jump palette with running sessions and a preview of the last reply](assets/screenshot-palette.png)
 
+Images from the transcript open in a viewer that pages through every image of
+the session with ← and →.
+
+![Image viewer over the transcript, image 16 of 26](assets/screenshot-lightbox.png)
+
+When a prompt was rewound and rewritten, the session keeps both versions. The
+switcher above the prompt shows which one you are reading and jumps to the
+other.
+
+![Branch switcher above a rewritten prompt](assets/screenshot-branches.png)
+
+Triage mode (⌘⇧T) queues up the sessions where Claude finished and waits for
+you, and lets you answer them one after another.
+
+![Triage mode: the queue of sessions and a reply box](assets/screenshot-triage.png)
+
 ## Features
 
 Browsing
