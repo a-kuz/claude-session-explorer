@@ -78,7 +78,12 @@ struct SessionListView: View {
                                     .listRowBackground(rowBackground(selected))
                                 // Matched prompts as children of the session row;
                                 // a click opens the session at that prompt.
-                                ForEach(Array(hit.prompts.prefix(promptRowLimit).enumerated()), id: \.offset) { _, p in
+                                // Row ids must be unique across the whole List, not
+                                // just within one session: include the session id.
+                                ForEach(hit.prompts.prefix(promptRowLimit).enumerated().map {
+                                    (id: "\(hit.meta.id)#\($0.offset)", prompt: $0.element)
+                                }, id: \.id) { row in
+                                    let p = row.prompt
                                     let tag = AppModel.promptTag(sessionID: hit.meta.id, uuid: p.uuid)
                                     let psel = model.listSelection.contains(tag)
                                     PromptResultRow(prompt: p, tokens: model.searchTokens, isSelected: psel)
