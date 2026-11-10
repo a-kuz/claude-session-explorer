@@ -502,10 +502,38 @@ final class AppModel: ObservableObject {
 
     private func startWatching() {
         guard watcher == nil else { return }
-        watcher = FolderWatcher(path: Loader.projectsDir.path) { [weak self] in
-            Task.detached(priority: .utility) { await self?.sync(initial: false) }
+        let root = Loader.projectsDir.path
+        watcher = FolderWatcher(path: root, relevant: { path, isDir in
+            // The list is built from `<project>/<id>.jsonl` only; subagent
+            // transcripts and other files under a project can't change it.
+            // Directory events stay: a project folder may appear or vanish.
+            if isDir || !path.hasPrefix(root) { return true }
+            guard path.hasSuffix(".jsonl") else { return false }
+            let rel = path.dropFirst(root.count).drop(while: { $0 == "/" })
+            return rel.filter({ $0 == "/" }).count == 1
+        }) { [weak self] in
+            Task { @MainActor in self?.requestSync() }
         }
         watcher?.start()
+    }
+
+    private var syncRunning = false
+    private var syncQueued = false
+
+    /// One watcher-driven sync at a time. Two passes over the same file would
+    /// both read from the same `parsedOffset` and append its prompts twice; a
+    /// request that arrives mid-pass runs once after it.
+    private func requestSync() {
+        if syncRunning { syncQueued = true; return }
+        syncRunning = true
+        Task.detached(priority: .utility) { [weak self] in
+            await self?.sync(initial: false)
+            await MainActor.run {
+                guard let self else { return }
+                self.syncRunning = false
+                if self.syncQueued { self.syncQueued = false; self.requestSync() }
+            }
+        }
     }
 
     /// The open session's file mtime, to detect whether *it* actually changed.
@@ -528,8 +556,11 @@ final class AppModel: ObservableObject {
 
         for path in files {
             let id = (path as NSString).lastPathComponent.replacingOccurrences(of: ".jsonl", with: "")
-            let mtime = Loader.fileMtime(path)
-            let size = Int(Loader.fileLength(path))
+            // One attribute lookup for both values (each lookup also reads the
+            // file's extended attributes).
+            let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+            let mtime = (attrs?[.modificationDate] as? Date) ?? .distantPast
+            let size = Int((attrs?[.size] as? NSNumber)?.uint64Value ?? 0)
 
             let rec = byID[id]
             // Unchanged file with up-to-date metadata schema → nothing to do.
