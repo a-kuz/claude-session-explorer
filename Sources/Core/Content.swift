@@ -322,8 +322,11 @@ enum MessageContent {
         // Only the first `max` characters of the result are kept, so collapse a
         // bounded head of the text and widen it until the result is long enough;
         // a pasted prompt can run to hundreds of kilobytes.
-        var window = max * 4 + 64
-        while text.utf8.count > window {
+        // Callers that want the whole text pass a huge `max`; the window then
+        // starts at the text length and the loop is skipped.
+        let total = text.utf8.count
+        var window = max < total ? max * 4 + 64 : total
+        while total > window {
             let collapsed = applyReplace(whitespaceRun, " ", String(text.prefix(window)))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if collapsed.count > max { return String(collapsed.prefix(max)) }
