@@ -521,6 +521,7 @@ final class PalettePanel: NSObject, NSWindowDelegate {
 
     func show() {
         guard let app else { return }
+        if app.inBackground { app.syncNow() }
         let m = PaletteModel(app: app)
         model = m
         let p = panel ?? makePanel()

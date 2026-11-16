@@ -45,10 +45,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// A window of the explorer came up again (Dock/Finder reopen, palette
     /// jump): the app gets its Dock icon back.
+    /// Also tracks whether any explorer window is open, for the background
+    /// sync rate.
     func applicationDidUpdate(_ notification: Notification) {
-        if NSApp.activationPolicy() != .regular,
-           NSApp.windows.contains(where: { !($0 is NSPanel) && $0.isVisible && $0.canBecomeMain }) {
+        let windowOpen = NSApp.windows.contains { !($0 is NSPanel) && $0.isVisible && $0.canBecomeMain }
+        if windowOpen, NSApp.activationPolicy() != .regular {
             NSApp.setActivationPolicy(.regular)
+        }
+        MainActor.assumeIsolated {
+            if Self.model.inBackground == windowOpen { Self.model.inBackground = !windowOpen }
         }
     }
 

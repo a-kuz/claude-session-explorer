@@ -542,9 +542,40 @@ final class AppModel: ObservableObject {
             let rel = path.dropFirst(root.count).drop(while: { $0 == "/" })
             return rel.filter({ $0 == "/" }).count == 1
         }) { [weak self] in
-            Task { @MainActor in self?.requestSync() }
+            Task { @MainActor in self?.watcherFired() }
         }
         watcher?.start()
+    }
+
+    /// No explorer window is open (background mode for the palette hotkey).
+    /// Nobody sees the list then, so file changes are synced at most once per
+    /// `backgroundSyncDelay` instead of on every write; opening the palette or
+    /// a window syncs right away.
+    var inBackground = false {
+        didSet {
+            guard inBackground != oldValue, !inBackground else { return }
+            syncNow()
+        }
+    }
+    private static let backgroundSyncDelay: UInt64 = 60_000_000_000
+    private var deferredSync: Task<Void, Never>?
+
+    private func watcherFired() {
+        guard inBackground else { requestSync(); return }
+        guard deferredSync == nil else { return }
+        deferredSync = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.backgroundSyncDelay)
+            guard let self, !Task.isCancelled else { return }
+            self.deferredSync = nil
+            self.requestSync()
+        }
+    }
+
+    /// Sync now, dropping a deferred background sync.
+    func syncNow() {
+        deferredSync?.cancel()
+        deferredSync = nil
+        requestSync()
     }
 
     private var syncRunning = false
