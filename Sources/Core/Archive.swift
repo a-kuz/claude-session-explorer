@@ -140,7 +140,8 @@ enum Archive {
     private static let lock = NSLock()
 
     /// One backup pass: compress every session file that is quiet and differs
-    /// from its archive, then evict uploaded archives from the local disk.
+    /// from its archive, delete local files past `localRetention`, then evict
+    /// uploaded archives from the local disk.
     /// With `sweep`, every downloaded archive is a candidate for eviction (an
     /// archived session read by the app gets downloaded and stays otherwise).
     /// Blocking; run off the main thread, one pass at a time.
@@ -161,6 +162,8 @@ enum Archive {
             if compress(path, to: dst, mtime: mtime) { pendingEviction.insert(dst) }
         }
 
+        pruneLocal(olderThan: now.addingTimeInterval(-localRetention))
+
         if sweep {
             let keys: [URLResourceKey] = [.ubiquitousItemDownloadingStatusKey]
             if let walker = fm.enumerator(at: root, includingPropertiesForKeys: keys) {
@@ -171,7 +174,6 @@ enum Archive {
             }
         }
         evictUploaded()
-        pruneLocal(olderThan: now.addingTimeInterval(-localRetention))
     }
 
     /// Delete local session files last written before `cutoff` whose archives
