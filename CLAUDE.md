@@ -161,6 +161,14 @@ Data flow: jsonl on disk → `Loader` (parsing) → `Store` (SwiftData cache) �
   `JSONLBytes.read` falls back to the archive. "Open in terminal" restores the
   files into the projects dir first (with a fresh mtime, so the CLI's cleanup
   doesn't remove them again at start).
+- **Background agents** (`Sources/LaunchAgents`, registered via SMAppService):
+  `ai.enface.SessionExplorer.backup` runs the `session-backup` tool
+  (`Sources/BackupAgent`) every 10 min, log in `~/Library/Logs/SessionExplorer/backup.log`;
+  `ai.enface.SessionExplorer.agent` (login toggle) runs `session-launcher`
+  (`Sources/Launcher`), which opens the app hidden via LaunchServices — launchd
+  refuses the app's own executable as an agent program. The app is signed ad
+  hoc, so each build invalidates the registrations: `AgentSignature`
+  re-registers them when the cdhash changes.
 - **`AutoTitle.swift`** — a lazy deterministic title from the first request
   (no network/LLM), when there is no `custom-title`/`ai-title`.
 - **`OpenSession.swift`** — open a session in the terminal (Ghostty / Terminal.app /

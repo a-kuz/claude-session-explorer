@@ -23,11 +23,27 @@ targets:
       - path: Sources
         excludes:
           - LaunchAgents
+          - BackupAgent
+          - Launcher
       - path: Sources/LaunchAgents/ai.enface.SessionExplorer.agent.plist
         buildPhase:
           copyFiles:
             destination: wrapper
             subpath: Contents/Library/LaunchAgents
+      - path: Sources/LaunchAgents/ai.enface.SessionExplorer.backup.plist
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchAgents
+    dependencies:
+      - target: SessionBackup
+        embed: true
+        copy:
+          destination: executables
+      - target: SessionLauncher
+        embed: true
+        copy:
+          destination: executables
     info:
       path: Sources/Info.plist
       properties:
@@ -49,6 +65,30 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: ai.enface.SessionExplorer
         COMBINE_HIDPI_IMAGES: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon"
+
+  SessionBackup:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Sources/Core
+      - path: Sources/Models
+      - path: Sources/BackupAgent
+    settings:
+      base:
+        PRODUCT_NAME: session-backup
+        PRODUCT_BUNDLE_IDENTIFIER: ai.enface.SessionExplorer.backup
+        SKIP_INSTALL: YES
+
+  SessionLauncher:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Sources/Launcher
+    settings:
+      base:
+        PRODUCT_NAME: session-launcher
+        PRODUCT_BUNDLE_IDENTIFIER: ai.enface.SessionExplorer.launcher
+        SKIP_INSTALL: YES
 
 schemes:
   SessionExplorer:

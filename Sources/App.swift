@@ -6,7 +6,21 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static let backgroundEnv = "SESSION_EXPLORER_BACKGROUND"
 
+    /// A background start while the app is already open (the login agent
+    /// fires when its toggle is turned on) leaves; the open app stays resident.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        guard ProcessInfo.processInfo.environment[Self.backgroundEnv] == "1",
+              let id = Bundle.main.bundleIdentifier else { return }
+        let me = NSRunningApplication.current.processIdentifier
+        if NSRunningApplication.runningApplications(withBundleIdentifier: id)
+            .contains(where: { $0.processIdentifier != me }) {
+            exit(0)
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AgentSignature.reregisterIfRebuilt(
+            LoginAgent.wanted ? [LoginAgent.service, BackupService.service] : [BackupService.service])
         guard ProcessInfo.processInfo.environment[Self.backgroundEnv] == "1" else { return }
         // SwiftUI opens the WindowGroup window right after launch; close it so
         // a login-time start doesn't pop a window in the user's face.

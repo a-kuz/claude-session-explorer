@@ -509,13 +509,16 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Back up quiet session files to iCloud Drive now and every 10 minutes.
-    /// The first pass also evicts archives downloaded in earlier launches.
+    /// iCloud backup runs in the `session-backup` launchd agent. While the
+    /// agent isn't enabled (registration refused), the app runs the same pass
+    /// itself every 10 minutes.
     nonisolated private func runBackups() async {
         var sweep = true
         while !Task.isCancelled {
-            Archive.backupPass(sweep: sweep)
-            sweep = false
+            if !BackupService.ensureRegistered() {
+                Archive.backupPass(sweep: sweep)
+                sweep = false
+            }
             try? await Task.sleep(nanoseconds: 600_000_000_000)
         }
     }

@@ -5,15 +5,10 @@
 	<key>Label</key>
 	<string>ai.enface.SessionExplorer.agent</string>
 	<key>BundleProgram</key>
-	<string>Contents/MacOS/SessionExplorer</string>
+	<string>Contents/MacOS/session-launcher</string>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>ProcessType</key>
 	<string>Interactive</string>
-	<key>EnvironmentVariables</key>
-	<dict>
-		<key>SESSION_EXPLORER_BACKGROUND</key>
-		<string>1</string>
-	</dict>
 </dict>
 </plist>

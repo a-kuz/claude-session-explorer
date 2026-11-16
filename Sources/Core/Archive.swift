@@ -134,6 +134,15 @@ enum Archive {
 
     // MARK: - Backup
 
+    /// What one `backupPass` did.
+    struct PassStats {
+        var archived = 0
+        var archivedBytes = 0
+        var pruned = 0
+        var evicted = 0
+        var failed = 0
+    }
+
     /// Archives evicted after upload; tried again on later passes until the
     /// upload has finished.
     private static var pendingEviction: Set<URL> = []
@@ -145,8 +154,10 @@ enum Archive {
     /// With `sweep`, every downloaded archive is a candidate for eviction (an
     /// archived session read by the app gets downloaded and stays otherwise).
     /// Blocking; run off the main thread, one pass at a time.
-    static func backupPass(sweep: Bool) {
-        guard let root else { return }
+    @discardableResult
+    static func backupPass(sweep: Bool) -> PassStats {
+        var stats = PassStats()
+        guard let root else { return stats }
         lock.lock(); defer { lock.unlock() }
         let fm = FileManager.default
         try? fm.createDirectory(at: root, withIntermediateDirectories: true)
@@ -159,10 +170,16 @@ enum Archive {
                   let dst = archiveURL(forLocal: path) else { continue }
             if let have = (try? fm.attributesOfItem(atPath: dst.path))?[.modificationDate] as? Date,
                abs(have.timeIntervalSince(mtime)) < 0.001 { continue }
-            if compress(path, to: dst, mtime: mtime) { pendingEviction.insert(dst) }
+            if compress(path, to: dst, mtime: mtime) {
+                pendingEviction.insert(dst)
+                stats.archived += 1
+                stats.archivedBytes += (attrs[.size] as? Int) ?? 0
+            } else {
+                stats.failed += 1
+            }
         }
 
-        pruneLocal(olderThan: now.addingTimeInterval(-localRetention))
+        stats.pruned = pruneLocal(olderThan: now.addingTimeInterval(-localRetention))
 
         if sweep {
             let keys: [URLResourceKey] = [.ubiquitousItemDownloadingStatusKey]
@@ -173,13 +190,16 @@ enum Archive {
                 }
             }
         }
-        evictUploaded()
+        stats.evicted = evictUploaded()
+        return stats
     }
 
     /// Delete local session files last written before `cutoff` whose archives
     /// are current and uploaded. The jsonl goes only when every file of its
     /// `<id>/` dir went too, so a restore brings the whole session back.
-    private static func pruneLocal(olderThan cutoff: Date) {
+    /// Returns the number of sessions removed.
+    private static func pruneLocal(olderThan cutoff: Date) -> Int {
+        var removed = 0
         let fm = FileManager.default
         func safelyArchived(_ path: String) -> Bool {
             guard let mtime = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date,
@@ -203,8 +223,9 @@ enum Archive {
             }
             guard complete else { continue }
             try? fm.removeItem(atPath: dir)
-            try? fm.removeItem(atPath: jsonl)
+            if (try? fm.removeItem(atPath: jsonl)) != nil { removed += 1 }
         }
+        return removed
     }
 
     /// Session jsonl files plus the regular files under each session's `<id>/`
@@ -255,7 +276,8 @@ enum Archive {
     }
 
     /// Free the local copy of every pending archive that iCloud has uploaded.
-    private static func evictUploaded() {
+    private static func evictUploaded() -> Int {
+        var evicted = 0
         let keys: Set<URLResourceKey> = [.ubiquitousItemIsUploadedKey, .ubiquitousItemDownloadingStatusKey]
         for url in pendingEviction {
             guard let v = try? url.resourceValues(forKeys: keys) else {
@@ -265,7 +287,9 @@ enum Archive {
             guard v.ubiquitousItemIsUploaded == true else { continue }
             if (try? FileManager.default.evictUbiquitousItem(at: url)) != nil {
                 pendingEviction.remove(url)
+                evicted += 1
             }
         }
+        return evicted
     }
 }
