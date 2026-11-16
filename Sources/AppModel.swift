@@ -482,7 +482,14 @@ final class AppModel: ObservableObject {
 
     // MARK: - Loading
 
+    private var didLoad = false
+
+    /// Runs once per process: at launch from the app delegate (a hidden login
+    /// start has no window, so `onAppear` alone would never register the
+    /// palette hotkey), and again harmlessly from each window's `onAppear`.
     func load() {
+        guard !didLoad else { return }
+        didLoad = true
         PalettePanel.shared.configure(app: self)
         PalettePanel.setGlobalHotkey(enabled: paletteGlobalHotkey)
         // 1) Instant first paint from the persistent cache.

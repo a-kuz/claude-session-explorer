@@ -556,6 +556,9 @@ final class PalettePanel: NSObject, NSWindowDelegate {
         // to its size over ~230 ms. The window keeps its final frame so the
         // shadow lands where the panel does.
         p.alphaValue = 0
+        // A hidden app (login start, ⌘H) shows none of its windows, panels
+        // included.
+        if NSApp.isHidden { NSApp.unhideWithoutActivation() }
         p.makeKeyAndOrderFront(nil)
         Self.animateBlur(host.layer, from: 14, to: 0, duration: 0.1)
         Self.springScale(host.layer, from: 1.05, to: 1, duration: 0.3)

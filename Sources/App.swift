@@ -5,6 +5,7 @@ import AppKit
 /// ⌃⌥Space palette keeps working), and starts hidden when launchd started it.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static let backgroundEnv = "SESSION_EXPLORER_BACKGROUND"
+    @MainActor static let model = AppModel()
 
     /// A background start while the app is already open (the login agent
     /// fires when its toggle is turned on) leaves; the open app stays resident.
@@ -19,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        MainActor.assumeIsolated { Self.model.load() }
         AgentSignature.reregisterIfRebuilt(
             LoginAgent.wanted ? [LoginAgent.service, BackupService.service] : [BackupService.service])
         guard ProcessInfo.processInfo.environment[Self.backgroundEnv] == "1" else { return }
@@ -38,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct SessionExplorerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @StateObject private var model = AppModel()
+    @StateObject private var model = AppDelegate.model
 
     var body: some Scene {
         // Keep the standard title-bar window so full-screen (⌘⌃F) and the zoom
