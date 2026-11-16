@@ -153,9 +153,11 @@ Data flow: jsonl on disk → `Loader` (parsing) → `Store` (SwiftData cache) �
 - **`Archive.swift`** — backup to `iCloud Drive/Claude Sessions/`: a mirror of the
   projects dir (`<id>.jsonl` and the files of its `<id>/` dir), each file LZMA
   (`.xz`), the archive's mtime = the source's mtime. Quiet files (10 min) are
-  backed up every 10 min, uploaded archives are evicted from the local disk. The
-  CLI deletes transcripts older than `cleanupPeriodDays` (default 30); such a
-  session keeps its `SessionRecord` and its local `filePath`, and
+  backed up every 10 min, uploaded archives are evicted from the local disk.
+  Session files untouched for 14 days are deleted locally once their archives
+  are current and uploaded (the CLI's own `cleanupPeriodDays`, default 30,
+  deletes without that check). A session gone from the projects dir keeps its
+  `SessionRecord` and its local `filePath`, and
   `JSONLBytes.read` falls back to the archive. "Open in terminal" restores the
   files into the projects dir first (with a fresh mtime, so the CLI's cleanup
   doesn't remove them again at start).

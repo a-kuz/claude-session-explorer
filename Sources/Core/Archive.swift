@@ -27,6 +27,11 @@ enum Archive {
     /// live session isn't recompressed on every turn.
     static let quietPeriod: TimeInterval = 10 * 60
 
+    /// A session untouched for this long is removed from the projects dir once
+    /// its archive is current and uploaded. Shorter than the CLI's own cleanup
+    /// (`cleanupPeriodDays`, default 30), which deletes without a backup.
+    static let localRetention: TimeInterval = 14 * 24 * 3600
+
     private static let ext = "xz"
 
     /// Archive location of a file under the projects dir, or nil when iCloud
@@ -166,6 +171,38 @@ enum Archive {
             }
         }
         evictUploaded()
+        pruneLocal(olderThan: now.addingTimeInterval(-localRetention))
+    }
+
+    /// Delete local session files last written before `cutoff` whose archives
+    /// are current and uploaded. The jsonl goes only when every file of its
+    /// `<id>/` dir went too, so a restore brings the whole session back.
+    private static func pruneLocal(olderThan cutoff: Date) {
+        let fm = FileManager.default
+        func safelyArchived(_ path: String) -> Bool {
+            guard let mtime = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date,
+                  mtime < cutoff,
+                  let dst = archiveURL(forLocal: path),
+                  let have = (try? fm.attributesOfItem(atPath: dst.path))?[.modificationDate] as? Date,
+                  abs(have.timeIntervalSince(mtime)) < 0.001,
+                  (try? dst.resourceValues(forKeys: [.ubiquitousItemIsUploadedKey]))?.ubiquitousItemIsUploaded == true
+            else { return false }
+            return true
+        }
+        for jsonl in Loader.listSessionFiles() where safelyArchived(jsonl) {
+            let dir = (jsonl as NSString).deletingPathExtension
+            var complete = true
+            if let walker = fm.enumerator(at: URL(fileURLWithPath: dir, isDirectory: true),
+                                          includingPropertiesForKeys: [.isRegularFileKey]) {
+                for case let url as URL in walker
+                where (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
+                    if safelyArchived(url.path) { try? fm.removeItem(at: url) } else { complete = false }
+                }
+            }
+            guard complete else { continue }
+            try? fm.removeItem(atPath: dir)
+            try? fm.removeItem(atPath: jsonl)
+        }
     }
 
     /// Session jsonl files plus the regular files under each session's `<id>/`
