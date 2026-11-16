@@ -22,10 +22,6 @@ enum TextIndex {
         directory.appendingPathComponent("\(id).txt").path
     }
 
-    static func exists(_ id: String) -> Bool {
-        FileManager.default.fileExists(atPath: path(id))
-    }
-
     /// The index lines of one record's content (`message.content` or a queued
     /// prompt): string content and blocks in order.
     static func lines(of content: Any?, isUser: Bool) -> [String] {

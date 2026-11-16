@@ -651,6 +651,7 @@ final class AppModel: ObservableObject {
             } else if let cold = Loader.parseSessionMetaWithPrompts(path) {
                 // Cold parse: new file, shrunk/rotated file, or a schema bump.
                 meta = cold.meta
+                newOffset = cold.parsedBytes
                 PromptIndex.shared.replace(cold.prompts, for: id)
                 TextIndex.replace(cold.texts, for: id)
             }
@@ -698,7 +699,7 @@ final class AppModel: ObservableObject {
                       let cold = Loader.parseSessionMetaWithPrompts(path) else { continue }
                 PromptIndex.shared.replace(cold.prompts, for: id)
                 TextIndex.replace(cold.texts, for: id)
-                store.upsert(meta: cold.meta, offset: cold.meta.byteSize, fileMtime: cold.meta.mtime,
+                store.upsert(meta: cold.meta, offset: cold.parsedBytes, fileMtime: cold.meta.mtime,
                              schemaVersion: Self.metaSchemaVersion, into: ctx)
                 dirty = true
                 sinceSave += 1
@@ -1064,7 +1065,8 @@ final class AppModel: ObservableObject {
         var merged: [String: SearchHit] = [:]
         for h in cheap { merged[h.id] = h }
         if !queryChanged && !promptsOnly {
-            let byId = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
+            // A ⌘O-opened file can also be in the library: first one wins.
+            let byId = Dictionary(candidates.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             for h in hits where merged[h.id] == nil {
                 if let m = byId[h.id] { merged[h.id] = SearchHit(meta: m, score: h.score, snippet: h.snippet) }
             }
@@ -1161,9 +1163,9 @@ final class AppModel: ObservableObject {
         loadTask = Task.detached(priority: .userInitiated) {
             let d = Loader.loadDialogCached(meta)
             if Task.isCancelled { return }
-            // An archived session is read from its archive: the offset is the
-            // length that was parsed, so a restore appends nothing twice.
-            let len = FileManager.default.fileExists(atPath: path) ? Loader.fileLength(path) : d.sourceLength
+            // The offset is the length the (possibly cached) parse covers:
+            // whatever was appended since is read as a tail right after.
+            let len = d.sourceLength
             let mtime = Loader.fileMtime(path)
             // build вне main, включая граф веток и фильтр активного пути
             let graph = BranchGraph.build(from: d.messages)
@@ -1180,6 +1182,7 @@ final class AppModel: ObservableObject {
                 self.openDialogMtime = mtime
                 self.applyDialog(d, graph: graph, turns: builtTurns, blocks: builtBlocks,
                                  builtBrief: brief, builtMode: mode)
+                if Loader.fileLength(path) > len { self.refreshOpenDialog() }
             }
         }
     }
@@ -1984,9 +1987,9 @@ final class AppModel: ObservableObject {
         hidden.insert(id)
         hiddenUndo.append(id)
         UserDefaults.standard.set(Array(hidden), forKey: hiddenKey)
+        recomputeHits(instant: true)
         // Move selection off the now-hidden session.
         if selectedID == id { selectedID = filteredHits.first?.meta.id }
-        recomputeHits(instant: true)
     }
 
     /// Ctrl+Z — restore the most recently hidden session.
@@ -2165,12 +2168,12 @@ final class AppModel: ObservableObject {
     /// an in-place edit: the stored parsedOffset points into the old byte
     /// layout, so the incremental tail path must not be trusted for this file.
     nonisolated private func reindexFile(_ path: String) async {
-        guard let (meta, prompts, texts) = Loader.parseSessionMetaWithPrompts(path) else { return }
+        guard let (meta, prompts, texts, parsed) = Loader.parseSessionMetaWithPrompts(path) else { return }
         PromptIndex.shared.replace(prompts, for: meta.id)
         TextIndex.replace(texts, for: meta.id)
         let ctx = ModelContext(store.container)
         let mtime = Loader.fileMtime(path)
-        let size = Int(Loader.fileLength(path))
+        let size = parsed
         store.upsert(meta: meta, offset: size, fileMtime: mtime,
                      schemaVersion: Self.metaSchemaVersion, into: ctx)
         try? ctx.save()

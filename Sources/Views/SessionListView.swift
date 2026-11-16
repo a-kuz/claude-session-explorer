@@ -306,40 +306,6 @@ struct SessionRow: View {
     }
 }
 
-/// A 4-segment bar gauge (like a signal-strength meter) giving a glanceable
-/// sense of a session's size. Bar heights mirror the design mock.
-struct SizeBars: View {
-    /// How many of the 4 bars are filled (1…4).
-    let level: Int
-    var filled: Color = .secondary
-    var empty: Color = Color(nsColor: .quaternaryLabelColor)
-
-    @Environment(\.s) private var s
-
-    private static let heights: [CGFloat] = [4, 6, 8, 9]
-
-    /// Coarse size buckets: <128 KB, <1 MB, <8 MB, else.
-    static func level(forBytes bytes: Int) -> Int {
-        switch bytes {
-        case ..<131_072: return 1
-        case ..<1_048_576: return 2
-        case ..<8_388_608: return 3
-        default: return 4
-        }
-    }
-
-    var body: some View {
-        HStack(alignment: .bottom, spacing: s(1.5)) {
-            ForEach(0..<4, id: \.self) { i in
-                RoundedRectangle(cornerRadius: s(1))
-                    .fill(i < level ? filled : empty)
-                    .frame(width: s(2.5), height: s(Self.heights[i]))
-            }
-        }
-        .frame(height: s(9))
-    }
-}
-
 /// Cap on prompt children shown under one session in search results.
 private let promptRowLimit = 8
 

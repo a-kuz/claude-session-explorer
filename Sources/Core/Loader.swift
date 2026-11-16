@@ -275,11 +275,12 @@ enum Loader {
     /// Cold parse that also returns every user prompt in the file, for the
     /// prompt index (which the cold path replaces wholesale).
     static func parseSessionMetaWithPrompts(_ filePath: String)
-        -> (meta: SessionMeta, prompts: [IndexedPrompt], texts: [String])? {
-        guard let content = JSONLBytes.read(filePath) else { return nil }
+        -> (meta: SessionMeta, prompts: [IndexedPrompt], texts: [String], parsedBytes: Int)? {
+        guard let read = JSONLBytes.read(filePath) else { return nil }
+        let content = read.prefix(JSONLBytes.wholeLinesLength(read))
         let attrs = try? FileManager.default.attributesOfItem(atPath: filePath)
         let fileMtime = (attrs?[.modificationDate] as? Date) ?? Archive.sourceMtime(forLocal: filePath) ?? Date()
-        let byteSize = (attrs?[.size] as? Int) ?? content.count
+        let byteSize = (attrs?[.size] as? Int) ?? read.count
         let id = (filePath as NSString).lastPathComponent.replacingOccurrences(of: ".jsonl", with: "")
 
         var acc = MetaAccumulator(id: id)
@@ -288,7 +289,7 @@ enum Loader {
             acc.consume(rec)
         }
         guard let meta = acc.finish(filePath: filePath, byteSize: byteSize, fileMtime: fileMtime) else { return nil }
-        return (meta, acc.newPrompts, acc.newTexts)
+        return (meta, acc.newPrompts, acc.newTexts, content.count)
     }
 
     /// Incrementally update a session's metadata by reading ONLY the appended tail
@@ -307,7 +308,9 @@ enum Loader {
             return (prev, end, fileMtime, [], [])
         }
         try? handle.seek(toOffset: fromOffset)
-        let data = (try? handle.readToEnd()) ?? Data()
+        let read = (try? handle.readToEnd()) ?? Data()
+        let whole = JSONLBytes.wholeLinesLength(read)
+        let data = read.prefix(whole)
 
         var acc = MetaAccumulator(seed: prev)
         JSONLBytes.forEachLine(data) { line, _, _ in
@@ -315,7 +318,7 @@ enum Loader {
             acc.consume(rec)
         }
         guard let meta = acc.finish(filePath: filePath, byteSize: Int(end), fileMtime: fileMtime) else { return nil }
-        return (meta, end, fileMtime, acc.newPrompts, acc.newTexts)
+        return (meta, fromOffset + UInt64(whole), fileMtime, acc.newPrompts, acc.newTexts)
     }
 
     /// List every session jsonl file path under the projects dir.
@@ -335,50 +338,8 @@ enum Loader {
         return paths
     }
 
-    // Cache of parsed metadata keyed by file path, with the mtime it was parsed
-    // at. Lets a re-scan reuse unchanged files and only re-parse what moved.
-    private static var metaCache: [String: (mtime: Date, meta: SessionMeta)] = [:]
-    private static let metaLock = NSLock()
-
     static func fileMtime(_ path: String) -> Date {
         ((try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date) ?? .distantPast
-    }
-
-    /// Scan all projects in parallel and return metadata sorted by recency.
-    /// Files whose mtime is unchanged since the last scan are served from cache,
-    /// so steady-state re-scans only re-parse the handful that actually changed.
-    static func loadAllSessions() -> [SessionMeta] {
-        let files = listSessionFiles()
-        var results = [SessionMeta?](repeating: nil, count: files.count)
-        let lock = NSLock()
-
-        DispatchQueue.concurrentPerform(iterations: files.count) { i in
-            let path = files[i]
-            let mtime = fileMtime(path)
-
-            metaLock.lock()
-            let cached = metaCache[path]
-            metaLock.unlock()
-            if let cached = cached, cached.mtime == mtime {
-                lock.lock(); results[i] = cached.meta; lock.unlock()
-                return
-            }
-
-            if let meta = parseSessionMeta(path) {
-                metaLock.lock()
-                metaCache[path] = (mtime, meta)
-                metaLock.unlock()
-                lock.lock(); results[i] = meta; lock.unlock()
-            }
-        }
-
-        // Drop cache entries for files that disappeared.
-        let live = Set(files)
-        metaLock.lock()
-        metaCache = metaCache.filter { live.contains($0.key) }
-        metaLock.unlock()
-
-        return results.compactMap { $0 }.sorted { $0.mtime > $1.mtime }
     }
 
     /// Parse a chunk of jsonl bytes into dialog messages.
@@ -475,7 +436,10 @@ enum Loader {
         if end < fromOffset { return ([], end, true, "") }   // shrank/rotated
         if end == fromOffset { return ([], end, false, "") } // nothing new
         try? handle.seek(toOffset: fromOffset)
-        let data = (try? handle.readToEnd()) ?? Data()
+        let read = (try? handle.readToEnd()) ?? Data()
+        let whole = JSONLBytes.wholeLinesLength(read)
+        if whole == 0 { return ([], fromOffset, false, "") }   // only a record in progress
+        let data = read.prefix(whole)
         // A tail offset can land inside a multi-byte character; the damaged
         // bytes are repaired so the rest of the chunk still parses. Messages are
         // parsed from the bytes of `text` itself, so `loadImages(in: text)`
@@ -485,7 +449,7 @@ enum Loader {
         // Cancelled mid-parse: report "nothing read" at the unchanged offset, so
         // a caller that applies the result skips no records.
         guard parsed.complete else { return ([], fromOffset, false, "") }
-        return (parsed.messages, end, false, text)
+        return (parsed.messages, fromOffset + UInt64(whole), false, text)
     }
 
     /// Lazily load all inline images from a session, in the SAME order that
@@ -586,73 +550,13 @@ enum Loader {
 
     private static func loadDialogChecked(_ filePath: String) -> (dialog: SessionDialog, complete: Bool) {
         let id = (filePath as NSString).lastPathComponent.replacingOccurrences(of: ".jsonl", with: "")
-        guard let content = JSONLBytes.read(filePath) else {
+        guard let read = JSONLBytes.read(filePath) else {
             return (SessionDialog(id: id, messages: []), true)
         }
+        let content = read.prefix(JSONLBytes.wholeLinesLength(read))
         let parsed = content.withUnsafeBytes { parseDialogLines($0) }
         return (SessionDialog(id: id, messages: parsed.messages, sourceLength: UInt64(content.count)),
                 parsed.complete)
-    }
-
-    /// Derive list metadata from an already-parsed message array (no file read).
-    static func metaFrom(messages: [DialogMessage], filePath: String,
-                         header: (custom: String?, ai: String?, cwd: String?, model: String?),
-                         byteSize: Int, fileMtime: Date) -> SessionMeta? {
-        let id = (filePath as NSString).lastPathComponent.replacingOccurrences(of: ".jsonl", with: "")
-        var firstUser = "", lastUser = ""
-        var firstTs: Date?, lastTs: Date?, lastUserTs: Date?, lastClaudeTs: Date?
-        var userTurns = 0
-        let model = header.model
-        for m in messages {
-            if firstTs == nil { firstTs = m.timestamp }
-            if let t = m.timestamp { lastTs = t }
-            if m.role == .assistant, let t = m.timestamp { lastClaudeTs = t }
-            if m.role == .user, !m.isToolOrMeta {
-                let text = MessageContent.oneLine(MessageContent.stripNoise(m.bodyText))
-                if MessageContent.isMeaningfulUserText(text) {
-                    userTurns += 1
-                    if firstUser.isEmpty { firstUser = text }
-                    lastUser = text
-                    if let t = m.timestamp { lastUserTs = t }
-                }
-            }
-        }
-        if firstUser.isEmpty && lastUser.isEmpty && messages.isEmpty { return nil }
-        let projectPath = header.cwd ?? decodeProjectDirName(((filePath as NSString).deletingLastPathComponent as NSString).lastPathComponent)
-        return SessionMeta(
-            id: id, filePath: filePath, projectPath: projectPath,
-            projectLabel: projectLabel(from: projectPath),
-            title: header.custom ?? header.ai, titleIsCustom: header.custom != nil,
-            lastUserText: lastUser.isEmpty ? firstUser : lastUser,
-            firstUserText: firstUser.isEmpty ? lastUser : firstUser,
-            // Sort/display time = the user's LAST prompt (not Claude's last
-            // activity) — a session only climbs the list when YOU write to it.
-            mtime: lastUserTs ?? lastTs ?? fileMtime,
-            firstActivity: firstTs, lastActivity: lastTs,
-            messageCount: messages.count, byteSize: byteSize,
-            userTurnCount: userTurns, model: model,
-            lastUserTime: lastUserTs, lastClaudeTime: lastClaudeTs)
-    }
-
-    /// Read the title records (custom/ai) and cwd from a jsonl prefix — needed
-    /// for meta but not part of the dialog message stream.
-    static func readHeader(_ filePath: String, limitBytes: Int = 1_000_000)
-        -> (custom: String?, ai: String?, cwd: String?, model: String?) {
-        guard let content = JSONLBytes.read(filePath) else {
-            return (nil, nil, nil, nil)
-        }
-        var custom: String?, ai: String?, cwd: String?, model: String?
-        JSONLBytes.forEachLine(content) { line, _, _ in
-            guard let rec = parseLine(line) else { return }
-            switch rec["type"] as? String {
-            case "custom-title": custom = rec["customTitle"] as? String
-            case "ai-title": ai = rec["aiTitle"] as? String
-            default:
-                if cwd == nil, let c = rec["cwd"] as? String { cwd = c }
-                if model == nil, let m = (rec["message"] as? [String: Any])?["model"] as? String { model = m }
-            }
-        }
-        return (custom, ai, cwd, model)
     }
 
     // Small LRU of recently opened dialogs (NOT every session — that leaked GBs).
@@ -755,6 +659,18 @@ enum JSONLBytes {
         guard t.count > 0, let base = t.baseAddress else { return nil }
         let data = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: base), count: t.count, deallocator: .none)
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    /// Length of the prefix made of whole lines (up to and including the last
+    /// newline). The CLI writes `line + "\n"`; bytes after the last newline
+    /// are a record still being written and must be read again later.
+    static func wholeLinesLength(_ data: Data) -> Int {
+        data.withUnsafeBytes { raw -> Int in
+            guard let base = raw.baseAddress, raw.count > 0 else { return 0 }
+            var i = raw.count
+            while i > 0, base.load(fromByteOffset: i - 1, as: UInt8.self) != 0x0A { i -= 1 }
+            return i
+        }
     }
 
     static func contains(_ haystack: UnsafeRawBufferPointer, _ needle: [UInt8]) -> Bool {

@@ -58,37 +58,6 @@ enum Format {
         dateFormatted(date, format: "d MMMM yyyy, HH:mm")
     }
 
-    /// Compact "16 June".
-    static func shortDate(_ date: Date) -> String {
-        dateFormatted(date, format: "d MMMM")
-    }
-
-    /// Span across a session: same day → "16 June 2026"; across days → "16 → 17 June 2026".
-    static func dateRange(_ first: Date?, _ last: Date?) -> String {
-        guard let last = last else { return "" }
-        guard let first = first, !Calendar.current.isDate(first, inSameDayAs: last) else {
-            return dateFormatted(last, format: "d MMMM yyyy")
-        }
-        let cal = Calendar.current
-        // Same month/year → "16 → 17 June 2026"
-        if cal.isDate(first, equalTo: last, toGranularity: .month) {
-            return "\(dateFormatted(first, format: "d")) → \(dateFormatted(last, format: "d MMMM yyyy"))"
-        }
-        return "\(dateFormatted(first, format: "d MMMM yyyy")) → \(dateFormatted(last, format: "d MMMM yyyy"))"
-    }
-
-    /// Session span with times: same day → "16 June 14:25 → 18:40";
-    /// across days → "16 June 22:11 → 17 June 00:40". Empty if no end time.
-    static func activitySpan(_ first: Date?, _ last: Date?) -> String {
-        guard let last = last else { return "" }
-        guard let first = first else { return dateFormatted(last, format: "d MMMM HH:mm") }
-        let lhs = dateFormatted(first, format: "d MMMM HH:mm")
-        let rhs = Calendar.current.isDate(first, inSameDayAs: last)
-            ? dateFormatted(last, format: "HH:mm")
-            : dateFormatted(last, format: "d MMMM HH:mm")
-        return "\(lhs) → \(rhs)"
-    }
-
     /// Locale-aware date formatting from a template (reorders fields per locale).
     private static func dateFormatted(_ date: Date, format template: String) -> String {
         FormatterCache.date(template: template).string(from: date)
@@ -109,11 +78,6 @@ enum Format {
             return (s.hasSuffix(".0") ? String(s.dropLast(2)) : s) + "M"
         }
         return "\(max(1, Int((Double(bytes) / 1_000).rounded())))K"
-    }
-
-    /// Message count with English pluralization, e.g. "1 message" / "5 messages".
-    static func messagesWord(_ n: Int) -> String {
-        "\(n) " + (n == 1 ? "message" : "messages")
     }
 
     /// Section bucket for the list (Today / Yesterday / This Week / older month).
