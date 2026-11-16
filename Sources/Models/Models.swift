@@ -152,6 +152,8 @@ final class SessionMeta: Identifiable, Hashable {
 struct SessionDialog {
     let id: String
     let messages: [DialogMessage]
+    /// Bytes of jsonl the messages were parsed from.
+    var sourceLength: UInt64 = 0
 }
 
 /// How the dialog renders a session that contains branches (a parent message

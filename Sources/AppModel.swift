@@ -352,7 +352,7 @@ final class AppModel: ObservableObject {
     private var watcher: FolderWatcher?
     private let store = Store()
     /// Derived-metadata schema version; bump to force recompute of cached rows.
-    static let metaSchemaVersion = 6  // v6: compaction summaries aren't prompts
+    static let metaSchemaVersion = 7  // v7: TextIndex built by the meta parse
     /// Last opened session id, restored on next launch.
     private var lastSelectedID: String?
     private var didRestore = false
@@ -505,6 +505,18 @@ final class AppModel: ObservableObject {
             }
             await self?.sync(initial: cached.isEmpty)
             await MainActor.run { self?.startWatching() }
+            await self?.runBackups()
+        }
+    }
+
+    /// Back up quiet session files to iCloud Drive now and every 10 minutes.
+    /// The first pass also evicts archives downloaded in earlier launches.
+    nonisolated private func runBackups() async {
+        var sweep = true
+        while !Task.isCancelled {
+            Archive.backupPass(sweep: sweep)
+            sweep = false
+            try? await Task.sleep(nanoseconds: 600_000_000_000)
         }
     }
 
@@ -527,6 +539,8 @@ final class AppModel: ObservableObject {
 
     private var syncRunning = false
     private var syncQueued = false
+    /// Archive listing already reconciled with the cache in this launch.
+    private var archiveScanned = false
 
     /// One watcher-driven sync at a time. Two passes over the same file would
     /// both read from the same `parsedOffset` and append its prompts twice; a
@@ -592,10 +606,12 @@ final class AppModel: ObservableObject {
                 meta = upd.meta
                 newOffset = Int(upd.newOffset)
                 PromptIndex.shared.append(upd.prompts, to: id)
+                TextIndex.append(upd.texts, to: id)
             } else if let cold = Loader.parseSessionMetaWithPrompts(path) {
                 // Cold parse: new file, shrunk/rotated file, or a schema bump.
                 meta = cold.meta
                 PromptIndex.shared.replace(cold.prompts, for: id)
+                TextIndex.replace(cold.texts, for: id)
             }
             guard let meta else { continue }
             store.upsert(meta: meta, offset: newOffset, fileMtime: mtime,
@@ -618,11 +634,40 @@ final class AppModel: ObservableObject {
             }
         }
 
-        // Remove records for deleted files.
+        // Remove records for deleted files; a session the CLI deleted but that
+        // has an iCloud archive stays (it is read from the archive).
         let live = Set(files.map { ($0 as NSString).lastPathComponent.replacingOccurrences(of: ".jsonl", with: "") })
-        for r in existing where !live.contains(r.id) {
+        for r in existing where !live.contains(r.id) && !Archive.exists(forLocal: r.filePath) {
             ctx.delete(r); dirty = true
             PromptIndex.shared.remove(r.id)
+            TextIndex.remove(r.id)
+        }
+
+        // Archived sessions the cache doesn't know (a reset cache, another Mac)
+        // are parsed from their archives — once per launch, since the archive
+        // listing can't change from under the projects dir.
+        if await MainActor.run(body: { [weak self] in
+            guard let self, !self.archiveScanned else { return false }
+            self.archiveScanned = true
+            return true
+        }) {
+            for path in Archive.archivedSessionPaths() {
+                let id = (path as NSString).lastPathComponent.replacingOccurrences(of: ".jsonl", with: "")
+                guard !live.contains(id), byID[id] == nil,
+                      let cold = Loader.parseSessionMetaWithPrompts(path) else { continue }
+                PromptIndex.shared.replace(cold.prompts, for: id)
+                TextIndex.replace(cold.texts, for: id)
+                store.upsert(meta: cold.meta, offset: cold.meta.byteSize, fileMtime: cold.meta.mtime,
+                             schemaVersion: Self.metaSchemaVersion, into: ctx)
+                dirty = true
+                sinceSave += 1
+                if sinceSave >= 25 {
+                    try? ctx.save()
+                    sinceSave = 0
+                    let snapshot = store.metas(in: ctx)
+                    await MainActor.run { [weak self] in self?.applySynced(snapshot) }
+                }
+            }
         }
 
         if dirty || sinceSave > 0 { try? ctx.save() }
@@ -1075,7 +1120,9 @@ final class AppModel: ObservableObject {
         loadTask = Task.detached(priority: .userInitiated) {
             let d = Loader.loadDialogCached(meta)
             if Task.isCancelled { return }
-            let len = Loader.fileLength(path)
+            // An archived session is read from its archive: the offset is the
+            // length that was parsed, so a restore appends nothing twice.
+            let len = FileManager.default.fileExists(atPath: path) ? Loader.fileLength(path) : d.sourceLength
             let mtime = Loader.fileMtime(path)
             // build вне main, включая граф веток и фильтр активного пути
             let graph = BranchGraph.build(from: d.messages)
@@ -1869,7 +1916,9 @@ final class AppModel: ObservableObject {
         showToast(jobs.count == 1 ? "Compressing session…" : "Compressing \(jobs.count) sessions…")
         Task.detached(priority: .userInitiated) { [weak self] in
             var ok = 0
-            for job in jobs where Gzip.compress(file: job.meta.filePath, to: job.url) { ok += 1 }
+            for job in jobs where Archive.withReadablePath(job.meta.filePath, {
+                Gzip.compress(file: $0, to: job.url)
+            }) == true { ok += 1 }
             let n = jobs.count
             await MainActor.run { [weak self] in
                 self?.showToast(ok == n ? (n == 1 ? "Session exported" : "Sessions exported: \(n)")
@@ -2075,8 +2124,9 @@ final class AppModel: ObservableObject {
     /// an in-place edit: the stored parsedOffset points into the old byte
     /// layout, so the incremental tail path must not be trusted for this file.
     nonisolated private func reindexFile(_ path: String) async {
-        guard let (meta, prompts) = Loader.parseSessionMetaWithPrompts(path) else { return }
+        guard let (meta, prompts, texts) = Loader.parseSessionMetaWithPrompts(path) else { return }
         PromptIndex.shared.replace(prompts, for: meta.id)
+        TextIndex.replace(texts, for: meta.id)
         let ctx = ModelContext(store.container)
         let mtime = Loader.fileMtime(path)
         let size = Int(Loader.fileLength(path))
@@ -2109,6 +2159,12 @@ final class AppModel: ObservableObject {
     func openInTerminal(meta: SessionMeta) {
         let title = AutoTitle.displayTitle(meta)
         Task.detached {
+            // `claude --resume` reads the projects dir: an archived session is
+            // put back there first.
+            guard Archive.restore(forLocal: meta.filePath) else {
+                await MainActor.run { self.showToast("Session file is missing and its archive is unreadable") }
+                return
+            }
             let r = OpenSession.openInTerminal(meta, displayTitle: title)
             await MainActor.run { self.showToast(r.message) }
         }
@@ -2133,6 +2189,8 @@ final class AppModel: ObservableObject {
     func resetCache() {
         store.deleteAllCached()
         PromptIndex.shared.removeAll()
+        TextIndex.removeAll()
+        archiveScanned = false
         allSessions = []
         loading = true
         recomputeHits(instant: true)

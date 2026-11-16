@@ -76,7 +76,7 @@ enum ShareService {
             let tmp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("se-share-\(id)-\(n).gz")
             defer { try? FileManager.default.removeItem(at: tmp) }
-            guard Gzip.compress(file: meta.filePath, to: tmp),
+            guard Archive.withReadablePath(meta.filePath, { Gzip.compress(file: $0, to: tmp) }) == true,
                   let size = (try? FileManager.default.attributesOfItem(atPath: tmp.path))?[.size] as? Int,
                   size > 0,
                   let handle = try? FileHandle(forReadingFrom: tmp) else {

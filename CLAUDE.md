@@ -143,8 +143,22 @@ Data flow: jsonl on disk → `Loader` (parsing) → `Store` (SwiftData cache) �
 - **`Content.swift`** — extracting text from the `message.content` forms, filtering
   out noise (`<command-*>`, caveats, reminders).
 - **`Search.swift`** — a two-level cancellable search: cheap (instant, over
-  titles/last replies, on the main actor) + deep (incremental over the whole dialog,
-  off-thread, 250ms debounce, chunks of 40). AND across words, regex via `/pattern/`.
+  titles/last replies, on the main actor) + deep (over each session's `TextIndex`
+  file, never the jsonl; off-thread, 250ms debounce, chunks of 40). AND across
+  words, regex via `/pattern/`.
+- **`TextIndex.swift`** — `Application Support/SessionExplorer/text/<id>.txt`, one
+  line per content block of the main transcript: human/assistant text, thinking,
+  tool input JSON, the first 500 chars of each tool result (no images). Filled by
+  the same meta parse as the Store: tail parse appends, cold parse rewrites.
+- **`Archive.swift`** — backup to `iCloud Drive/Claude Sessions/`: a mirror of the
+  projects dir (`<id>.jsonl` and the files of its `<id>/` dir), each file LZMA
+  (`.xz`), the archive's mtime = the source's mtime. Quiet files (10 min) are
+  backed up every 10 min, uploaded archives are evicted from the local disk. The
+  CLI deletes transcripts older than `cleanupPeriodDays` (default 30); such a
+  session keeps its `SessionRecord` and its local `filePath`, and
+  `JSONLBytes.read` falls back to the archive. "Open in terminal" restores the
+  files into the projects dir first (with a fresh mtime, so the CLI's cleanup
+  doesn't remove them again at start).
 - **`AutoTitle.swift`** — a lazy deterministic title from the first request
   (no network/LLM), when there is no `custom-title`/`ai-title`.
 - **`OpenSession.swift`** — open a session in the terminal (Ghostty / Terminal.app /

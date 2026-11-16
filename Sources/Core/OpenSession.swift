@@ -250,6 +250,9 @@ enum OpenSession {
     }
 
     static func revealInFinder(_ meta: SessionMeta) {
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: meta.filePath)])
+        let url = FileManager.default.fileExists(atPath: meta.filePath)
+            ? URL(fileURLWithPath: meta.filePath)
+            : Archive.archiveURL(forLocal: meta.filePath) ?? URL(fileURLWithPath: meta.filePath)
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 }

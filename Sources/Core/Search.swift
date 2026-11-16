@@ -249,31 +249,27 @@ enum Search {
 
     // MARK: - Deep scan (streaming, byte-level)
 
-    private static let chunkSize = 1 << 20
-    private static let markers: [[UInt8]] = [
-        Array("\"text\"".utf8), Array("\"content\"".utf8), Array("\"prompt\"".utf8),
-    ]
-    private static let dataKey = Array("\"data\":\"".utf8)
+    private static let chunkSize = 4 << 20
 
-    /// Scan the session file for `tokens` (all lowercased) or `regex`, resuming
-    /// from the cached progress for this query. Only lines carrying prose
-    /// markers are considered, and `"data":"…"` string values (base64 images)
-    /// are skipped so short tokens don't match inside image payloads. Progress
-    /// is cached even when cancelled mid-file, so the next pass continues from
-    /// the last complete line.
+    /// Scan the session's `TextIndex` file for `tokens` (all lowercased) or
+    /// `regex`, resuming from the cached progress for this query. The file is
+    /// read in large chunks cut at line ends; each token is one memmem over the
+    /// case-folded chunk. Progress is cached even when cancelled mid-file, so
+    /// the next pass continues from the last complete line.
     static func deepScan(_ meta: SessionMeta, query: String, tokens: [String],
                          regex: NSRegularExpression?, isCancelled: () -> Bool,
                          scratch: ScanScratch? = nil) -> DeepScanState {
+        let path = TextIndex.path(meta.id)
         var state = DeepScanState()
         if let prior = DeepScanCache.shared.state(for: meta.id, query: query) {
             // A shrunk file was rewritten — the cached prefix no longer applies.
-            if prior.scannedBytes <= fileSize(meta.filePath) { state = prior }
+            if prior.scannedBytes <= fileSize(path) { state = prior }
         }
         let wantTokens = tokens.filter { !state.found.contains($0) }
         if regex == nil && wantTokens.isEmpty { return state }
         if regex != nil && state.regexHit { return state }
 
-        let fd = open(meta.filePath, O_RDONLY)
+        let fd = open(path, O_RDONLY)
         guard fd >= 0 else { return state }
         defer { close(fd) }
 
@@ -291,56 +287,43 @@ enum Search {
         var splitLead = false
         // File offset of the first buffer byte (a line start).
         var offset = state.scannedBytes
-        var done = false
-        var cancelled = false
 
-        while !done && !cancelled {
-            if isCancelled() { break }
+        while !isCancelled() {
+            var eof = false
             autoreleasepool {
-            scratch.reserve(carry + chunkSize, keep: carry, withRaw: keepRaw)
-            let low = scratch.low
-            let raw = keepRaw ? scratch.raw : nil
-            let got = readFully(fd, into: (raw ?? low) + carry, count: chunkSize, at: offset + carry)
-            let eof = got < chunkSize
-            let total = carry + got
-            if let raw { (low + carry).update(from: raw + carry, count: got) }
-            splitLead = fold(low, from: splitLead ? carry - 1 : carry, to: total)
+                scratch.reserve(carry + chunkSize, keep: carry, withRaw: keepRaw)
+                let low = scratch.low
+                let raw = keepRaw ? scratch.raw : nil
+                let got = readFully(fd, into: (raw ?? low) + carry, count: chunkSize, at: offset + carry)
+                eof = got < chunkSize
+                let total = carry + got
+                if let raw { (low + carry).update(from: raw + carry, count: got) }
+                splitLead = fold(low, from: splitLead ? carry - 1 : carry, to: total)
 
-            let line = ScanLine(low: UnsafeBufferPointer(start: low, count: total),
-                                raw: raw.map { UnsafeBufferPointer(start: $0, count: total) },
-                                fd: fd, fileOffset: offset)
-            var lineStart = 0
-            var lastLineEnd = 0
-            // The carried bytes hold no newline.
-            var newlineFrom = carry
-            while lineStart < total {
-                guard let nl = findByte(0x0A, in: line.low, from: max(lineStart, newlineFrom)) else { break }
-                if isCancelled() { cancelled = true; break }
-                scanLine(line, lineStart..<nl, byteTokens: byteTokens,
-                         asciiFold: asciiFold, regex: regex, pending: &pending, state: &state)
-                lineStart = nl + 1
-                lastLineEnd = lineStart
-                newlineFrom = lineStart
-                if regex == nil ? pending.isEmpty : state.regexHit { done = true; break }
-            }
-            if !done, !cancelled, eof, lineStart < total {
-                // Unterminated last line (still being written): scan it but
-                // don't count it as consumed, so the next pass re-reads it.
-                scanLine(line, lineStart..<total, byteTokens: byteTokens,
-                         asciiFold: asciiFold, regex: regex, pending: &pending, state: &state)
-            }
-            if !done {
-                carry = total - lastLineEnd
-                if lastLineEnd > 0, carry > 0 {
-                    memmove(low, low + lastLineEnd, carry)
-                    if let raw { memmove(raw, raw + lastLineEnd, carry) }
+                let buf = ScanLine(low: UnsafeBufferPointer(start: low, count: total),
+                                   raw: raw.map { UnsafeBufferPointer(start: $0, count: total) },
+                                   fd: fd, fileOffset: offset)
+                // Bytes up to the last newline are whole lines; an unterminated
+                // tail at end of file (still being written) is scanned but not
+                // counted as consumed, so the next pass re-reads it.
+                var complete = total
+                while complete > carry, low[complete - 1] != 0x0A { complete -= 1 }
+                if complete == carry, carry > 0, low[carry - 1] != 0x0A { complete = 0 }
+                let scanEnd = eof ? total : complete
+                if scanEnd > 0 {
+                    scanChunk(buf, 0..<scanEnd, byteTokens: byteTokens, asciiFold: asciiFold,
+                              regex: regex, pending: &pending, state: &state)
+                }
+                carry = total - complete
+                if complete > 0, carry > 0 {
+                    memmove(low, low + complete, carry)
+                    if let raw { memmove(raw, raw + complete, carry) }
                 }
                 if carry == 0 { splitLead = false }
-                if eof { done = true }
+                offset += complete
+                state.scannedBytes = offset
             }
-            offset += lastLineEnd
-            state.scannedBytes = offset
-            }
+            if eof || (regex == nil ? pending.isEmpty : state.regexHit) { break }
         }
         DeepScanCache.shared.store(state, for: meta.id, query: query)
         return state
@@ -373,13 +356,19 @@ enum Search {
         let fileOffset: Int
     }
 
-    private static func scanLine(_ line: ScanLine, _ range: Range<Int>,
-                                 byteTokens: [(String, [UInt8])], asciiFold: Bool,
-                                 regex: NSRegularExpression?, pending: inout Set<String>,
-                                 state: inout DeepScanState) {
-        let low = line.low
-        guard markers.contains(where: { find($0, in: low, range) != nil }) else { return }
-        if let re = regex, let raw = line.raw {
+    /// The line around buffer index `at`, within `range`.
+    private static func lineBounds(_ buf: UnsafeBufferPointer<UInt8>, at: Int, _ range: Range<Int>) -> Range<Int> {
+        var lo = at
+        while lo > range.lowerBound, buf[lo - 1] != 0x0A { lo -= 1 }
+        let hi = findByte(0x0A, in: buf, from: at, to: range.upperBound) ?? range.upperBound
+        return lo..<hi
+    }
+
+    private static func scanChunk(_ buf: ScanLine, _ range: Range<Int>,
+                                  byteTokens: [(String, [UInt8])], asciiFold: Bool,
+                                  regex: NSRegularExpression?, pending: inout Set<String>,
+                                  state: inout DeepScanState) {
+        if let re = regex, let raw = buf.raw {
             let s = String(decoding: UnsafeBufferPointer(rebasing: raw[range]), as: UTF8.self)
             if let m = re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) {
                 state.regexHit = true
@@ -391,39 +380,24 @@ enum Search {
         }
         if asciiFold {
             for (key, tok) in byteTokens {
-                guard pending.contains(key) else { continue }
-                if let at = findSkippingData(tok, in: low, range) {
-                    pending.remove(key)
-                    if state.snippet == nil { state.snippet = snippet(line, at: at, length: tok.count, in: range) }
-                    state.found.insert(key)
+                guard pending.contains(key), let at = find(tok, in: buf.low, range) else { continue }
+                pending.remove(key)
+                state.found.insert(key)
+                if state.snippet == nil {
+                    state.snippet = snippet(buf, at: at, length: tok.count, in: lineBounds(buf.low, at: at, range))
                 }
             }
-        } else if let raw = line.raw {
+        } else if let raw = buf.raw {
             // Tokens with letters outside ASCII/Cyrillic: fold via String.
             let s = String(decoding: UnsafeBufferPointer(rebasing: raw[range]), as: UTF8.self).lowercased()
             for key in pending {
                 if let r = s.range(of: key) {
                     pending.remove(key)
-                    if state.snippet == nil { state.snippet = snippet(in: s, around: r) }
                     state.found.insert(key)
+                    if state.snippet == nil { state.snippet = snippet(in: s, around: r) }
                 }
             }
         }
-    }
-
-    /// Search `needle` inside `range`, jumping over `"data":"…"` string values.
-    private static func findSkippingData(_ needle: [UInt8], in buf: UnsafeBufferPointer<UInt8>,
-                                         _ range: Range<Int>) -> Int? {
-        var from = range.lowerBound
-        while from < range.upperBound {
-            let dataAt = find(dataKey, in: buf, from..<range.upperBound)
-            let segEnd = dataAt ?? range.upperBound
-            if let hit = find(needle, in: buf, from..<segEnd) { return hit }
-            guard let d = dataAt else { return nil }
-            let valueStart = d + dataKey.count
-            from = (findByte(0x22, in: buf, from: valueStart, to: range.upperBound) ?? range.upperBound - 1) + 1
-        }
-        return nil
     }
 
     static func find(_ needle: [UInt8], in buf: UnsafeBufferPointer<UInt8>, _ range: Range<Int>) -> Int? {
@@ -517,9 +491,13 @@ enum Search {
     }
 
     private static func snippet(in s: String, around r: Range<String.Index>, radius: Int = 60) -> String {
-        let lower = s.index(r.lowerBound, offsetBy: -radius, limitedBy: s.startIndex) ?? s.startIndex
-        let upper = s.index(r.upperBound, offsetBy: radius, limitedBy: s.endIndex) ?? s.endIndex
-        return decorate(String(s[lower..<upper]), leading: lower > s.startIndex, trailing: upper < s.endIndex)
+        // Context stays within the matched line (an index line is one block).
+        let line = s.lineRange(for: r)
+        let start = line.lowerBound
+        let end = s[line].last == "\n" ? s.index(before: line.upperBound) : line.upperBound
+        let lower = s.index(r.lowerBound, offsetBy: -radius, limitedBy: start) ?? start
+        let upper = s.index(r.upperBound, offsetBy: radius, limitedBy: end) ?? end
+        return decorate(String(s[lower..<min(upper, end)]), leading: lower > start, trailing: upper < end)
     }
 
     private static func decorate(_ mid: String, leading: Bool, trailing: Bool) -> String {

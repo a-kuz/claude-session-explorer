@@ -137,6 +137,8 @@ enum Loader {
         /// User prompts seen by THIS pass (never seeded from a cached row) —
         /// full text, for the persistent prompt index.
         var newPrompts: [IndexedPrompt] = []
+        /// `TextIndex` lines of the records seen by THIS pass.
+        var newTexts: [String] = []
 
         init(id: String) { self.id = id }
 
@@ -186,6 +188,9 @@ enum Loader {
                 if type == "assistant", model == nil, let m = msg?["model"] as? String {
                     model = m
                 }
+                if (rec["isMeta"] as? Bool) != true {
+                    newTexts += TextIndex.lines(of: msg?["content"], isUser: type == "user")
+                }
                 if type == "user" {
                     let c = msg?["content"]
                     if (rec["isMeta"] as? Bool) == true || (rec["isCompactSummary"] as? Bool) == true
@@ -214,6 +219,7 @@ enum Loader {
                         lastTimestamp = ts
                         if firstTimestamp == nil { firstTimestamp = ts }
                     }
+                    newTexts += TextIndex.lines(of: att["prompt"], isUser: true)
                     let raw = MessageContent.contentToText(att["prompt"])
                     let full = MessageContent.oneLine(MessageContent.stripNoise(raw), max: .max)
                     let text = MessageContent.oneLine(full)
@@ -268,10 +274,11 @@ enum Loader {
 
     /// Cold parse that also returns every user prompt in the file, for the
     /// prompt index (which the cold path replaces wholesale).
-    static func parseSessionMetaWithPrompts(_ filePath: String) -> (meta: SessionMeta, prompts: [IndexedPrompt])? {
+    static func parseSessionMetaWithPrompts(_ filePath: String)
+        -> (meta: SessionMeta, prompts: [IndexedPrompt], texts: [String])? {
         guard let content = JSONLBytes.read(filePath) else { return nil }
         let attrs = try? FileManager.default.attributesOfItem(atPath: filePath)
-        let fileMtime = (attrs?[.modificationDate] as? Date) ?? Date()
+        let fileMtime = (attrs?[.modificationDate] as? Date) ?? Archive.sourceMtime(forLocal: filePath) ?? Date()
         let byteSize = (attrs?[.size] as? Int) ?? content.count
         let id = (filePath as NSString).lastPathComponent.replacingOccurrences(of: ".jsonl", with: "")
 
@@ -281,7 +288,7 @@ enum Loader {
             acc.consume(rec)
         }
         guard let meta = acc.finish(filePath: filePath, byteSize: byteSize, fileMtime: fileMtime) else { return nil }
-        return (meta, acc.newPrompts)
+        return (meta, acc.newPrompts, acc.newTexts)
     }
 
     /// Incrementally update a session's metadata by reading ONLY the appended tail
@@ -290,14 +297,14 @@ enum Loader {
     /// and fold in just the new lines. Returns nil if the file shrank/rotated
     /// (caller must fall back to a full `parseSessionMeta`) or vanished.
     static func updateSessionMeta(prev: SessionMeta, filePath: String, fromOffset: UInt64)
-        -> (meta: SessionMeta, newOffset: UInt64, fileMtime: Date, prompts: [IndexedPrompt])? {
+        -> (meta: SessionMeta, newOffset: UInt64, fileMtime: Date, prompts: [IndexedPrompt], texts: [String])? {
         guard let handle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: filePath)) else { return nil }
         defer { try? handle.close() }
         let end = (try? handle.seekToEnd()) ?? 0
         if end < fromOffset { return nil }                 // shrank/rotated → caller re-parses
         let fileMtime = fileMtime(filePath)
         if end == fromOffset {                             // mtime touched but no new bytes
-            return (prev, end, fileMtime, [])
+            return (prev, end, fileMtime, [], [])
         }
         try? handle.seek(toOffset: fromOffset)
         let data = (try? handle.readToEnd()) ?? Data()
@@ -308,7 +315,7 @@ enum Loader {
             acc.consume(rec)
         }
         guard let meta = acc.finish(filePath: filePath, byteSize: Int(end), fileMtime: fileMtime) else { return nil }
-        return (meta, end, fileMtime, acc.newPrompts)
+        return (meta, end, fileMtime, acc.newPrompts, acc.newTexts)
     }
 
     /// List every session jsonl file path under the projects dir.
@@ -583,7 +590,8 @@ enum Loader {
             return (SessionDialog(id: id, messages: []), true)
         }
         let parsed = content.withUnsafeBytes { parseDialogLines($0) }
-        return (SessionDialog(id: id, messages: parsed.messages), parsed.complete)
+        return (SessionDialog(id: id, messages: parsed.messages, sourceLength: UInt64(content.count)),
+                parsed.complete)
     }
 
     /// Derive list metadata from an already-parsed message array (no file read).
@@ -698,8 +706,12 @@ enum JSONLBytes {
     /// The whole file, read into memory. Not memory-mapped: the CLI truncates a
     /// live session file in place when it tombstones a failed streaming attempt,
     /// and touching a mapped page past the new end is a SIGBUS.
+    /// A session whose file is gone from the projects dir is read from its
+    /// iCloud archive.
     static func read(_ filePath: String) -> Data? {
-        try? Data(contentsOf: URL(fileURLWithPath: filePath))
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: filePath)) { return data }
+        if FileManager.default.fileExists(atPath: filePath) { return nil }
+        return Archive.read(forLocal: filePath)
     }
 
     /// Calls `body` for every non-empty line with its bytes (no copy, valid only

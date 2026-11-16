@@ -175,21 +175,31 @@ extension Palette {
         let len = Loader.fileLength(meta.filePath)
         var block: DialogBlock?
         var chunk = ""
-        for bytes in previewTailSteps {
-            let from = len > bytes ? len - bytes : 0
-            guard let tail = Loader.loadDialogTail(meta.filePath, fromOffset: from) else { return nil }
-            chunk = tail.text
-            let blocks = DialogBlock.build(from: DialogTurn.build(from: tail.messages, brief: true))
+        var archivedImages: [NSImage]?
+        if !FileManager.default.fileExists(atPath: meta.filePath) {
+            // Archived session: no file to read a tail from — the whole dialog
+            // comes from the archive.
+            let d = Loader.loadDialogCached(meta)
+            let blocks = DialogBlock.build(from: DialogTurn.build(from: d.messages, brief: true))
             block = blocks.last(where: \.hasPrompt) ?? blocks.last
-            // A prompt with a pasted image is one multi-megabyte line: keep
-            // widening until the block actually starts with its prompt.
-            if block?.hasPrompt == true || from == 0 { break }
+            if block?.promptTurn?.imageCount ?? 0 > 0 { archivedImages = Loader.loadImages(meta.filePath) }
+        } else {
+            for bytes in previewTailSteps {
+                let from = len > bytes ? len - bytes : 0
+                guard let tail = Loader.loadDialogTail(meta.filePath, fromOffset: from) else { return nil }
+                chunk = tail.text
+                let blocks = DialogBlock.build(from: DialogTurn.build(from: tail.messages, brief: true))
+                block = blocks.last(where: \.hasPrompt) ?? blocks.last
+                // A prompt with a pasted image is one multi-megabyte line: keep
+                // widening until the block actually starts with its prompt.
+                if block?.hasPrompt == true || from == 0 { break }
+            }
         }
         guard let block else { return nil }
         let prompt = block.promptTurn
         var promptImages: [NSImage] = []
         if let p = prompt, p.imageCount > 0, p.imageStartIndex >= 0 {
-            let all = Loader.loadImages(in: chunk)
+            let all = archivedImages ?? Loader.loadImages(in: chunk)
             let end = min(p.imageStartIndex + p.imageCount, all.count)
             if p.imageStartIndex < end { promptImages = Array(all[p.imageStartIndex..<end]) }
         }
