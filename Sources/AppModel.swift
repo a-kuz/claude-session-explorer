@@ -213,6 +213,50 @@ final class AppModel: ObservableObject {
     @Published var showHotkeyHelp = false
     /// Set to move keyboard focus into the transcript (Enter on a list row).
     @Published var focusTranscriptRequested = false
+    /// A row of the sidebar, in display order: the keyboard cursor target.
+    enum SidebarItem: Hashable {
+        case scope(Scope)
+        case attention
+        case project(String)
+    }
+    /// Keyboard cursor of the sidebar (←/→ move focus between panes, ↑/↓ move
+    /// this cursor, Space/Return activates the row).
+    @Published var sidebarCursor: SidebarItem?
+    /// True while the sidebar holds keyboard focus — the cursor is drawn only then.
+    @Published private(set) var sidebarHasFocus = false
+    func setSidebarHasFocus(_ f: Bool) {
+        guard f != sidebarHasFocus else { return }
+        sidebarHasFocus = f
+        if f, sidebarCursor.map({ !sidebarItems.contains($0) }) ?? true {
+            sidebarCursor = selectedProjectPaths.count == 1
+                ? selectedProjectPaths.first.map(SidebarItem.project) : .scope(scope)
+            if let c = sidebarCursor, !sidebarItems.contains(c) { sidebarCursor = .scope(scope) }
+        }
+    }
+
+    var sidebarItems: [SidebarItem] {
+        var out: [SidebarItem] = [.scope(.all), .attention, .scope(.favorites)]
+        if !hidden.isEmpty { out.append(.scope(.hidden)) }
+        out += visibleProjectRows.map { .project($0.path) }
+        out += [.scope(.today), .scope(.last24h), .scope(.last2d), .scope(.week)]
+        return out
+    }
+
+    func moveSidebarCursor(_ delta: Int) {
+        let items = sidebarItems
+        let idx = sidebarCursor.flatMap(items.firstIndex(of:)) ?? 0
+        sidebarCursor = items[max(0, min(items.count - 1, idx + delta))]
+    }
+
+    func activateSidebarCursor() {
+        switch sidebarCursor {
+        case .scope(let s): setScope(s)
+        case .attention: if attentionCount > 0 { enterTriage() }
+        case .project(let path):
+            if let p = visibleProjectRows.first(where: { $0.path == path }) { toggleProject(p) }
+        case nil: break
+        }
+    }
     /// True while the transcript (detail) holds keyboard focus — bare ↑/↓ then
     /// navigate replies instead of moving the session selection.
     var transcriptHasFocus = false
@@ -1071,7 +1115,14 @@ final class AppModel: ObservableObject {
                 if let m = byId[h.id] { merged[h.id] = SearchHit(meta: m, score: h.score, snippet: h.snippet) }
             }
         }
-        self.hits = merged.values.sorted { $0.meta.mtime > $1.meta.mtime }
+        let cheapSorted = merged.values.sorted { $0.meta.mtime > $1.meta.mtime }
+        // Search results fade/slide in instead of popping as the tiers land.
+        let animateHits = !q.trimmingCharacters(in: .whitespaces).isEmpty
+        if animateHits {
+            withAnimation(Self.searchHitsAnimation) { self.hits = cheapSorted }
+        } else {
+            self.hits = cheapSorted
+        }
 
         if promptsOnly || q.trimmingCharacters(in: .whitespaces).isEmpty { searching = false; return }
 
@@ -1105,7 +1156,7 @@ final class AppModel: ObservableObject {
                 let done = end >= snapshot.count
                 await MainActor.run { [weak self] in
                     guard let self, self.currentSearchToken == token else { return }
-                    self.hits = sorted
+                    withAnimation(Self.searchHitsAnimation) { self.hits = sorted }
                     if done { self.searching = false }
                     if !(self.hits.contains { $0.meta.id == self.selectedID }) {
                         self.selectedID = self.hits.first?.meta.id
@@ -1116,6 +1167,7 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private static let searchHitsAnimation = Animation.easeOut(duration: 0.25)
     private var lastSearchedQuery = ""
     private var currentSearchToken: UUID?
 

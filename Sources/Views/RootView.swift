@@ -195,6 +195,52 @@ private struct ResizableDivider: View {
     }
 }
 
+/// The columns keyboard focus moves between with ←/→.
+enum Pane { case sidebar, list, detail }
+
+/// Finds the List-backing NSTableViews of the main window (SwiftUI gives no
+/// handle to them), to read and move the first responder between columns.
+/// The sidebar is the source-list table, the session list is the one with
+/// multi-selection, the transcript is the remaining one.
+@MainActor
+enum PaneRegistry {
+    /// A view of the main window (the key monitor's host).
+    static weak var host: NSView?
+    static var window: NSWindow? { host?.window }
+
+    private static func pane(of t: NSTableView) -> Pane {
+        if t.style == .sourceList { return .sidebar }
+        return t.allowsMultipleSelection ? .list : .detail
+    }
+
+    /// The pane whose table holds the first responder of the main window.
+    static func focusedPane() -> Pane? {
+        var r = window?.firstResponder as? NSView
+        while let v = r {
+            if let t = v as? NSTableView { return pane(of: t) }
+            r = v.superview
+        }
+        return nil
+    }
+
+    private static func table(in pane: Pane) -> NSTableView? {
+        func find(_ v: NSView) -> NSTableView? {
+            if let t = v as? NSTableView, self.pane(of: t) == pane, !t.isHiddenOrHasHiddenAncestor { return t }
+            for s in v.subviews { if let t = find(s) { return t } }
+            return nil
+        }
+        return window?.contentView.flatMap(find)
+    }
+
+    /// Makes the pane's table the first responder; false when the pane is hidden.
+    @discardableResult
+    static func focus(_ pane: Pane) -> Bool {
+        guard let t = table(in: pane), let w = t.window else { return false }
+        w.makeKey()
+        return w.makeFirstResponder(t)
+    }
+}
+
 /// A minimal key monitor for layout-independent keys that can't live on the menu
 /// bar: the triage screen's navigation (matched by physical keyCode, so they
 /// work on any keyboard layout) and Esc. It never captures plain letters, so
@@ -204,6 +250,7 @@ private struct ModalKeyMonitor: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView {
         let v = NSView()
+        PaneRegistry.host = v
         context.coordinator.start(model: model)
         return v
     }
@@ -231,12 +278,21 @@ private struct ModalKeyMonitor: NSViewRepresentable {
             static let home: UInt16 = 115
             static let end: UInt16 = 119
             static let f: UInt16 = 3           // F
+            static let space: UInt16 = 49
+            static let backspace: UInt16 = 51
         }
 
         func start(model: AppModel) {
             self.model = model
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                MainActor.assumeIsolated { self?.handle(event) == true ? nil : event }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { [weak self] event in
+                MainActor.assumeIsolated {
+                    // The first responder settles after the event is delivered.
+                    DispatchQueue.main.async { [weak self] in
+                        self?.model?.setSidebarHasFocus(PaneRegistry.focusedPane() == .sidebar)
+                    }
+                    guard event.type == .keyDown else { return event }
+                    return self?.handle(event) == true ? nil : event
+                }
             }
         }
         func stop() { if let m = monitor { NSEvent.removeMonitor(m); monitor = nil } }
@@ -289,6 +345,44 @@ private struct ModalKeyMonitor: NSViewRepresentable {
             if mods == [.control, .command] {
                 if event.keyCode == Key.lbracket { model.jumpFirstTurn(); return true }
                 if event.keyCode == Key.rbracket { model.jumpLastTurn();  return true }
+            }
+
+            // ⌫ belongs to the text while a search is active: ⌘⌫ is the menu's
+            // "Hide Session", which would otherwise win over the field editor.
+            if event.keyCode == Key.backspace {
+                if isEditing, mods == [.command] {
+                    NSApp.sendAction(#selector(NSResponder.deleteToBeginningOfLine(_:)), to: nil, from: nil)
+                    return true
+                }
+                if !isEditing, !model.query.isEmpty, event.window === PaneRegistry.window {
+                    if mods.isEmpty { model.query.removeLast(); return true }
+                    if mods == [.command] { model.query = ""; return true }
+                }
+            }
+
+            // ←/→ move keyboard focus between the columns: projects ← sessions →
+            // replies. The sidebar has a cursor of its own (↑/↓, Space/Return).
+            if mods.isEmpty, !isEditing, event.window === PaneRegistry.window {
+                let pane = PaneRegistry.focusedPane()
+                if model.transcriptHasFocus || pane == .detail {
+                    if event.keyCode == Key.leftArrow, PaneRegistry.focus(.list) { return true }
+                } else if pane == .sidebar {
+                    switch event.keyCode {
+                    case Key.upArrow:   model.moveSidebarCursor(-1); return true
+                    case Key.downArrow: model.moveSidebarCursor(1);  return true
+                    case Key.space, Key.returnKey, Key.enter:
+                        model.activateSidebarCursor(); return true
+                    case Key.rightArrow:
+                        if PaneRegistry.focus(.list) { return true }
+                    default: break
+                    }
+                } else if pane == .list {
+                    if event.keyCode == Key.rightArrow, model.selectedID != nil {
+                        model.focusTranscriptRequested = true
+                        return true
+                    }
+                    if event.keyCode == Key.leftArrow, PaneRegistry.focus(.sidebar) { return true }
+                }
             }
 
             // Bare [ / ] — previous / next reply. Layout-independent, and active
@@ -344,6 +438,8 @@ private struct ModalKeyMonitor: NSViewRepresentable {
         private func isPrintable(_ event: NSEvent) -> Bool {
             guard let s = event.charactersIgnoringModifiers, let c = s.unicodeScalars.first
             else { return false }
+            // Arrows and other function keys arrive as U+F700…U+F8FF.
+            if (0xF700...0xF8FF).contains(c.value) { return false }
             return !CharacterSet.controlCharacters.contains(c)
                 && !CharacterSet.whitespacesAndNewlines.contains(c)
         }

@@ -7,6 +7,31 @@ struct SidebarView: View {
     @State private var projectsHeaderHovered = false
 
     var body: some View {
+        ScrollViewReader { proxy in
+            list
+                .onChange(of: model.sidebarCursor) { _, item in
+                    if let item, model.sidebarHasFocus { proxy.scrollTo(item) }
+                }
+        }
+    }
+
+    /// Row background: the accent fill of the active scope plus the keyboard
+    /// cursor (drawn only while the sidebar holds focus).
+    private func rowBackground(_ item: AppModel.SidebarItem, selected: Bool = false) -> some View {
+        let cursor = model.sidebarHasFocus && model.sidebarCursor == item
+        return ZStack {
+            if selected { RoundedRectangle(cornerRadius: 6).fill(Theme.accent) }
+            if cursor {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(selected ? Color.clear : Color.primary.opacity(0.09))
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(selected ? Color.white.opacity(0.75) : Theme.accent.opacity(0.7),
+                                  lineWidth: 1.5)
+            }
+        }
+    }
+
+    private var list: some View {
         List {
             Section {
                 quickRow(.all, icon: "tray.full", title: "All Sessions",
@@ -23,6 +48,8 @@ struct SidebarView: View {
             Section {
                 ForEach(model.visibleProjectRows) { p in
                     ProjectRow(project: p)
+                        .id(AppModel.SidebarItem.project(p.path))
+                        .listRowBackground(rowBackground(.project(p.path)))
                 }
             } header: {
                 HStack(spacing: 4) {
@@ -53,6 +80,7 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .environment(\.sidebarRowSize, .medium)
         .scrollContentBackground(.hidden)
     }
 
@@ -92,6 +120,8 @@ struct SidebarView: View {
                 .foregroundStyle(n > 0 ? Theme.accent : .secondary)
         }
         .contentShape(Rectangle())
+        .id(AppModel.SidebarItem.attention)
+        .listRowBackground(rowBackground(.attention))
         .onTapGesture { if n > 0 { model.enterTriage() } }
         .help(n > 0 ? "Reply to all one by one (\(n))" : "No sessions waiting for a reply")
     }
@@ -110,7 +140,8 @@ struct SidebarView: View {
         } icon: {
             Image(systemName: icon).foregroundStyle(selected ? Color.white : iconColor)
         }
-        .listRowBackground(selected ? RoundedRectangle(cornerRadius: 6).fill(Theme.accent) : nil)
+        .id(AppModel.SidebarItem.scope(s))
+        .listRowBackground(rowBackground(.scope(s), selected: selected))
         .foregroundStyle(selected ? Color.white : Color.primary)
         .contentShape(Rectangle())
         .onTapGesture { model.setScope(s) }

@@ -378,18 +378,23 @@ struct SearchResultRow: View {
     @Environment(\.uiScale) private var scale
     @Environment(\.s) private var s
 
+    /// The transcript match of a session with no matched prompts, drawn as a
+    /// child line in the shape of a prompt row.
+    private var transcriptSnippet: String? {
+        guard hit.prompts.isEmpty, let snippet = hit.snippet, !snippet.isEmpty else { return nil }
+        return snippet
+    }
+
     var body: some View {
-        // With prompt children underneath, the parent row is the session itself:
-        // its title on top, project below. Otherwise the match snippet leads.
-        let asTree = !hit.prompts.isEmpty
+        // The row is the session itself: its title on top, project below.
         VStack(alignment: .leading, spacing: s(5)) {
-            Text(asTree ? PromptResultRow.highlight(AutoTitle.displayTitle(hit.meta), tokens: tokens) : highlighted)
-                .font(.system(size: 12.5 * scale, weight: asTree ? .medium : .regular)).lineLimit(2)
+            Text(PromptResultRow.highlight(AutoTitle.displayTitle(hit.meta), tokens: tokens))
+                .font(.system(size: 12.5 * scale, weight: .medium)).lineLimit(2)
                 .foregroundStyle(isSelected ? Color.white : Color.primary)
             HStack(spacing: s(6)) {
                 RoundedRectangle(cornerRadius: s(2))
                     .fill(Theme.dotColor(for: hit.meta.projectPath)).frame(width: s(7), height: s(7))
-                Text(asTree ? hit.meta.projectLabel : "\(hit.meta.projectLabel) · \(AutoTitle.displayTitle(hit.meta))")
+                Text(hit.meta.projectLabel)
                     .font(.system(size: 11.5 * scale))
                     .foregroundStyle(isSelected ? Color.white.opacity(0.8) : Color.secondary)
                     .lineLimit(1)
@@ -399,26 +404,20 @@ struct SearchResultRow: View {
                     .foregroundStyle(isSelected ? Color.white.opacity(0.65)
                                                 : Color(nsColor: .tertiaryLabelColor))
             }
-        }
-        .padding(.vertical, s(3))
-    }
-
-    private var snippetText: String { hit.snippet ?? hit.meta.lastUserText }
-
-    private var highlighted: AttributedString {
-        var attr = AttributedString(snippetText)
-        let lower = snippetText.lowercased()
-        for token in tokens where !token.isEmpty {
-            var start = lower.startIndex
-            while let r = lower.range(of: token, range: start..<lower.endIndex) {
-                let lo = lower.distance(from: lower.startIndex, to: r.lowerBound)
-                let hi = lower.distance(from: lower.startIndex, to: r.upperBound)
-                let aLo = attr.index(attr.startIndex, offsetByCharacters: lo)
-                let aHi = attr.index(attr.startIndex, offsetByCharacters: hi)
-                attr[aLo..<aHi].backgroundColor = Theme.highlight
-                start = r.upperBound
+            if let snippet = transcriptSnippet {
+                HStack(alignment: .top, spacing: s(6)) {
+                    Image(systemName: "text.alignleft")
+                        .font(.system(size: 9 * scale, weight: .semibold))
+                        .foregroundStyle(isSelected ? Color.white.opacity(0.7) : Theme.tertiaryText)
+                        .padding(.top, s(3))
+                    Text(PromptResultRow.highlight(snippet, tokens: tokens))
+                        .font(.system(size: 12 * scale)).lineLimit(2)
+                        .foregroundStyle(isSelected ? Color.white.opacity(0.85) : Color.secondary)
+                }
+                .padding(.leading, s(14))
+                .padding(.top, s(3))
             }
         }
-        return attr
+        .padding(.vertical, s(3))
     }
 }

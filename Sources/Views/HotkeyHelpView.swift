@@ -15,6 +15,9 @@ struct HotkeyHelpView: View {
             Item(keys: "⌘K", label: "Jump to session (palette)"),
             Item(keys: "⌃⌥Space", label: "Jump palette from any app"),
             Item(keys: "⌘↓ / ⌘↑", label: "Next / previous session"),
+            Item(keys: "← / →", label: "Move focus: projects ← sessions → replies"),
+            Item(keys: "↓ in search", label: "Move focus to the session list"),
+            Item(keys: "↑ / ↓, Space", label: "In projects: move the cursor, toggle the row"),
             Item(keys: "⌘] / ⌘[", label: "Next / previous turn"),
             Item(keys: "⌘G / ⌘⇧G", label: "Next / previous match"),
         ]),
@@ -38,7 +41,7 @@ struct HotkeyHelpView: View {
             Item(keys: "⌘⇧P", label: "Export as PDF"),
             Item(keys: "⌘⇧R", label: "Reveal in Finder"),
             Item(keys: "⌘D", label: "Add to favorites"),
-            Item(keys: "⌘⌫", label: "Hide session"),
+            Item(keys: "⌘⌫", label: "Hide session (with an active search: clear the query)"),
         ]),
         Group(title: "Replies", items: [
             Item(keys: "⌘⇧T", label: "Reply to all in turn"),

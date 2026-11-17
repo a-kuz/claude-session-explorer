@@ -85,7 +85,14 @@ struct ToolbarSearchField: View {
                     focused = f
                     model.searchFieldFocused = f
                 },
-                onSubmit: { model.nextMatch(1) }
+                onSubmit: { model.nextMatch(1) },
+                onMoveDown: {
+                    guard !model.hits.isEmpty else { return }
+                    if model.selectedID == nil { model.selectedID = model.hits.first?.meta.id }
+                    // After the field editor finishes this command: ending the edit
+                    // inside it hands the focus on to the next key view.
+                    DispatchQueue.main.async { PaneRegistry.focus(.list) }
+                }
             )
             .frame(height: 18)
             .frame(maxWidth: .infinity)
@@ -166,6 +173,7 @@ struct FocusableTextField: NSViewRepresentable {
     @Binding var focusRequest: Bool
     var onFocusChange: (Bool) -> Void
     var onSubmit: () -> Void
+    var onMoveDown: () -> Void = {}
 
     func makeNSView(context: Context) -> FocusReportingTextField {
         let tf = FocusReportingTextField()
@@ -201,6 +209,7 @@ struct FocusableTextField: NSViewRepresentable {
         func control(_ control: NSControl, textView: NSTextView,
                      doCommandBy selector: Selector) -> Bool {
             if selector == #selector(NSResponder.insertNewline(_:)) { parent.onSubmit(); return true }
+            if selector == #selector(NSResponder.moveDown(_:)) { parent.onMoveDown(); return true }
             return false
         }
     }
