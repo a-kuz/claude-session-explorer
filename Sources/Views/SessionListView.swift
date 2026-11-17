@@ -122,6 +122,13 @@ struct SessionListView: View {
                     }
                 }
                 .listStyle(.inset)
+                // The window's initial first responder is the sidebar: start in
+                // the session list, where ↑/↓ and → are expected to act.
+                .onAppear {
+                    DispatchQueue.main.async {
+                        if PaneRegistry.focusedPane() == .sidebar { PaneRegistry.focus(.list) }
+                    }
+                }
                 .scrollContentBackground(.hidden)
                 .background(Theme.cardBg)
                 // Tell the model when the user is actively scrolling so live list

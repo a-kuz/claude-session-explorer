@@ -232,11 +232,25 @@ enum PaneRegistry {
         return window?.contentView.flatMap(find)
     }
 
+    /// A click on a row of the sidebar or the session list selects through
+    /// SwiftUI without moving the first responder: move it to the clicked table.
+    static func focusTable(at point: NSPoint) {
+        func find(_ v: NSView) -> NSTableView? {
+            if let t = v as? NSTableView, !t.isHiddenOrHasHiddenAncestor,
+               t.convert(t.visibleRect, to: nil).contains(point) { return t }
+            for s in v.subviews { if let t = find(s) { return t } }
+            return nil
+        }
+        guard let w = window, let t = w.contentView.flatMap(find), pane(of: t) != .detail else { return }
+        var r = w.firstResponder as? NSView
+        while let v = r { if v === t { return }; r = v.superview }
+        w.makeFirstResponder(t)
+    }
+
     /// Makes the pane's table the first responder; false when the pane is hidden.
     @discardableResult
     static func focus(_ pane: Pane) -> Bool {
         guard let t = table(in: pane), let w = t.window else { return false }
-        w.makeKey()
         return w.makeFirstResponder(t)
     }
 }
@@ -287,7 +301,10 @@ private struct ModalKeyMonitor: NSViewRepresentable {
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { [weak self] event in
                 MainActor.assumeIsolated {
                     // The first responder settles after the event is delivered.
+                    let click = event.type == .leftMouseDown && event.window === PaneRegistry.window
+                        ? event.locationInWindow : nil
                     DispatchQueue.main.async { [weak self] in
+                        if let click { PaneRegistry.focusTable(at: click) }
                         self?.model?.setSidebarHasFocus(PaneRegistry.focusedPane() == .sidebar)
                     }
                     guard event.type == .keyDown else { return event }
